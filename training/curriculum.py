@@ -2,11 +2,11 @@
 for the one world.Environment class (see wiki/decisions.md #9) -- no
 separate environment implementations per stage.
 
-Only stage 1 is defined so far (see wiki/roadmap.md). Threat count/radius
-are tuned tighter than the Environment defaults so threats are actually
-encountered often within an episode -- otherwise a policy that never meets
-a threat scores the same as one that dodges well, and ES has nothing to
-optimize against.
+Only stage 1 is defined so far (see wiki/roadmap.md). spider_spawn_rate is
+tuned well above the Environment default -- continuous spawning (not a
+fixed count) is what gives ES a real fitness gradient to train against
+(wiki/decisions.md #14); a rate too low would reproduce the flat-fitness
+problem from #12 even with spawning enabled.
 """
 
 from __future__ import annotations
@@ -29,8 +29,10 @@ STAGES: dict[int, Stage] = {
             max_ticks=80,
             food_enabled=False,
             threats_enabled=True,
-            num_threats=4,
+            spider_spawn_rate=0.08,
+            max_spiders=6,
             threat_radius=3.0,
+            threat_move_probability=0.3,
         ),
     ),
 }

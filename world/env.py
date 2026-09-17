@@ -1,26 +1,37 @@
 """Minimal grid-world survival environment for the fly.
 
-Deliberately simple (V1): fixed-size bounded grid, a handful of food and
-threat entities placed randomly at reset, no rendering, no open-world
-generation yet -- those are explicit later steps, not part of this.
+Deliberately simple: fixed-size bounded grid, no rendering, no open-world
+generation yet -- explicit later steps, not part of this.
 
 Design choices made here (flag if you'd rather have these different):
   - Food and threats both give a linear-falloff "gradient" signal that is
     exactly zero outside their radius -- the fly gets no information at all
     about something it hasn't come close enough to sense.
-  - Picking up food = entering its radius (as agreed). It refills hunger
-    to max and the food item is removed (no respawn in V1 -- food supply
-    shrinking over an episode is itself part of the survival pressure).
+  - Picking up food = entering its radius. It refills hunger to max and
+    the food item is removed.
   - Threat "contact" (death) is stricter than sensing: it only happens if
     the fly ends a move standing exactly on a threat's cell. The sense
     radius is a separate, larger range in which the fly gets a warning
     signal but is still safe -- this is what gives the escape circuit
     something to react to before it's too late.
+  - Spawning is continuous, not placed once at reset (see wiki/decisions.md
+    #14): each tick, with probability spider_spawn_rate/food_spawn_rate, a
+    new one appears at a random empty cell, up to a max count each. This is
+    what makes "spawn rate" a meaningful knob for the director layer.
+  - Threats wander: each tick, every threat has threat_move_probability
+    chance of taking one random step (can land on the fly's cell -- that's
+    the actual kill mechanism). This turned out to be necessary, not just
+    spawning -- continuous spawning alone was tested and does NOT give the
+    escape circuit a real training signal, because a *stationary* threat is
+    still permanently dodgeable ("retreat out of range once, stay there
+    forever"); see wiki/decisions.md #15 for the measurement that showed
+    this and corrected the earlier (untested) assumption in #14.
 
 Curriculum-friendly by construction: food/threats can each be switched off
 via food_enabled/threats_enabled, so training/curriculum.py can build
 different stages by configuring this one class rather than writing separate
-environments.
+environments. The same rate parameters double as the director's control
+surface once a game is running live (see director/).
 """
 
 from __future__ import annotations
@@ -31,6 +42,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from .entities import Food, Position, Threat
+
+SPAWN_RATE_BOUNDS = (0.0, 0.2)  # min/max per-tick spawn probability
+SPAWN_RATE_STEP = 0.02  # fixed nudge used by increase_*/decrease_*
 
 
 class Action(enum.IntEnum):
@@ -85,10 +99,13 @@ class Environment:
         grid_size: int = 20,
         max_hunger: int = 100,
         max_ticks: int = 300,
-        num_food: int = 3,
-        num_threats: int = 2,
+        spider_spawn_rate: float = 0.03,
+        food_spawn_rate: float = 0.03,
+        max_spiders: int = 10,
+        max_food: int = 10,
         food_radius: float = 2.0,
         threat_radius: float = 3.0,
+        threat_move_probability: float = 0.3,
         food_enabled: bool = True,
         threats_enabled: bool = True,
         seed: int | None = None,
@@ -96,10 +113,13 @@ class Environment:
         self.grid_size = grid_size
         self.max_hunger = max_hunger
         self.max_ticks = max_ticks
-        self.num_food = num_food if food_enabled else 0
-        self.num_threats = num_threats if threats_enabled else 0
+        self.spider_spawn_rate = self._clamp_rate(spider_spawn_rate if threats_enabled else 0.0)
+        self.food_spawn_rate = self._clamp_rate(food_spawn_rate if food_enabled else 0.0)
+        self.max_spiders = max_spiders
+        self.max_food = max_food
         self.food_radius = food_radius
         self.threat_radius = threat_radius
+        self.threat_move_probability = threat_move_probability
         self._rng = np.random.default_rng(seed)
 
         self.fly_pos: Position
@@ -109,6 +129,25 @@ class Environment:
         self.threats: list[Threat]
         self.reset()
 
+    @staticmethod
+    def _clamp_rate(rate: float) -> float:
+        return min(max(rate, SPAWN_RATE_BOUNDS[0]), SPAWN_RATE_BOUNDS[1])
+
+    # -- director-facing controls: the only way spawn pressure is adjusted
+    # once a game is running (see director/). Each call is a fixed,
+    # bounded nudge -- no magnitude argument, by design (wiki/decisions.md #14).
+    def increase_spider_rate(self) -> None:
+        self.spider_spawn_rate = self._clamp_rate(self.spider_spawn_rate + SPAWN_RATE_STEP)
+
+    def decrease_spider_rate(self) -> None:
+        self.spider_spawn_rate = self._clamp_rate(self.spider_spawn_rate - SPAWN_RATE_STEP)
+
+    def increase_food_rate(self) -> None:
+        self.food_spawn_rate = self._clamp_rate(self.food_spawn_rate + SPAWN_RATE_STEP)
+
+    def decrease_food_rate(self) -> None:
+        self.food_spawn_rate = self._clamp_rate(self.food_spawn_rate - SPAWN_RATE_STEP)
+
     def _random_empty_cell(self, taken: set[tuple[int, int]]) -> Position:
         while True:
             x = int(self._rng.integers(0, self.grid_size))
@@ -117,20 +156,35 @@ class Environment:
                 taken.add((x, y))
                 return Position(x, y)
 
+    def _occupied_cells(self) -> set[tuple[int, int]]:
+        cells = {(self.fly_pos.x, self.fly_pos.y)}
+        cells.update((f.position.x, f.position.y) for f in self.food)
+        cells.update((t.position.x, t.position.y) for t in self.threats)
+        return cells
+
     def reset(self) -> Observation:
         self.tick = 0
         self.hunger = self.max_hunger
-        taken: set[tuple[int, int]] = set()
-        self.fly_pos = self._random_empty_cell(taken)
-        self.food = [
-            Food(self._random_empty_cell(taken), self.food_radius)
-            for _ in range(self.num_food)
-        ]
-        self.threats = [
-            Threat(self._random_empty_cell(taken), self.threat_radius)
-            for _ in range(self.num_threats)
-        ]
+        self.fly_pos = self._random_empty_cell(set())
+        self.food = []
+        self.threats = []
         return self._observe()
+
+    def _move_threats(self) -> None:
+        moves = list(_MOVES.values())
+        for t in self.threats:
+            if self._rng.random() < self.threat_move_probability:
+                dx, dy = moves[int(self._rng.integers(0, len(moves)))]
+                t.position = Position(
+                    x=min(max(t.position.x + dx, 0), self.grid_size - 1),
+                    y=min(max(t.position.y + dy, 0), self.grid_size - 1),
+                )
+
+    def _spawn_tick(self) -> None:
+        if len(self.threats) < self.max_spiders and self._rng.random() < self.spider_spawn_rate:
+            self.threats.append(Threat(self._random_empty_cell(self._occupied_cells()), self.threat_radius))
+        if len(self.food) < self.max_food and self._rng.random() < self.food_spawn_rate:
+            self.food.append(Food(self._random_empty_cell(self._occupied_cells()), self.food_radius))
 
     def _nearest_in_range(self, positions: list[Position], radius: float):
         best_dist, best_pos = None, None
@@ -172,6 +226,8 @@ class Environment:
         )
         self.tick += 1
         self.hunger -= 1
+        self._move_threats()
+        self._spawn_tick()
 
         for f in self.food:
             if self.fly_pos.distance_to(f.position) <= f.pickup_radius:

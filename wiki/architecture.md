@@ -26,8 +26,15 @@ verified before being wired together.
 - **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`. No
   behavior, just data.
 - **`env.py`** — the `Environment` class. Fixed-size grid, a hunger bar
-  that depletes every tick, food and threats placed randomly at reset.
-  Exposes a Gym-style interface: `reset() -> Observation`,
+  that depletes every tick. Food and threats spawn continuously (not
+  placed once at reset) at `spider_spawn_rate`/`food_spawn_rate`, and
+  threats wander (`threat_move_probability` chance of a random step per
+  tick) — both needed for the escape circuit to have real, ongoing
+  pressure to react to rather than a one-time, permanently-dodgeable
+  placement (see `decisions.md` #14, #15). `increase_/decrease_spider_rate`
+  and `increase_/decrease_food_rate` are the only way those rates change —
+  the control surface `director/` calls into. Exposes a Gym-style
+  interface: `reset() -> Observation`,
   `step(action) -> StepResult(observation, reward, done, cause)`.
   Curriculum-friendly by construction — `food_enabled` / `threats_enabled`
   flags mean later training stages configure this one class differently

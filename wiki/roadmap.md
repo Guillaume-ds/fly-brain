@@ -12,13 +12,13 @@ see #13 for why that was dropped.
 |---|---|
 | Connectome data access (`fly_brain/data.py`) | done |
 | Connectome exploration (`analyze`, `simulate` commands) | done |
-| `world/env.py` — grid, hunger, food/threats | done, tested — **about to change**: fixed-count placement → continuous spawn-rate parameters (`decisions.md` #14) |
+| `world/env.py` — continuous spawn-rate params + threat movement | done, tested (`decisions.md` #14, #15) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
-| `training/curriculum.py` — stage configs | done (stage 1 only, will need updating for continuous spawning) |
+| `training/curriculum.py` — stage configs | done (stage 1 only) |
 | `training/trainer.py` / `training/run.py` — ES training loop | done, mechanically tested |
-| Stage 1 training run (clean escape) | was blocked on `decisions.md` #12 — expected to unblock once continuous spawning lands, not yet re-verified |
-| `director/` — swappable LLM world-controller layer | **designing now** (see `decisions.md` for the entry once settled) |
+| Stage 1 training run (clean escape) | **unblocked and verified** — real `population_reward_std` every iteration (`decisions.md` #15); 15-iteration smoke test only, a longer real run is still future work |
+| `director/` — swappable LLM world-controller layer | **building now** |
 | Reproduction mechanic (offspring = parent gains + ES perturbation, survival = selection) | designed in #13, not implemented |
 | Stage 2 / stage 3 (noisy escape, forage transfer) | not started |
 | REINFORCE implementation (comparison to ES) | not started |
@@ -26,14 +26,12 @@ see #13 for why that was dropped.
 
 ## Immediate next steps, in order
 
-1. `world/env.py`: replace fixed-count-at-reset placement with the two
-   bounded, independent continuous spawn-rate parameters
-   (`spider_spawn_rate`, `food_spawn_rate`) from `decisions.md` #14, plus
-   plain methods to adjust each.
-2. Re-run stage-1 ES training and confirm it now has real fitness
-   variance (the actual test of whether #14 fixes #12).
-3. `director/`: the swappable LLM world-controller layer sitting on top
-   of those methods — architecture being discussed now.
+1. ~~`world/env.py`: continuous spawn-rate parameters~~ done.
+2. ~~Re-run stage-1 ES training, confirm real fitness variance~~ done —
+   see `decisions.md` #15.
+3. `director/`: the swappable LLM world-controller layer on top of
+   `Environment`'s `increase_/decrease_spider_rate` /
+   `increase_/decrease_food_rate` methods — **building now**.
 4. Reproduction mechanic from #13.
 
 ## After that

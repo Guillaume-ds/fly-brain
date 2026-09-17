@@ -253,11 +253,7 @@ spider pressure and food scarcity separately tunable). Nothing else (grid
 size, hunger depletion, sensing radii, contact rule, *where* something
 spawns) is exposed to the user/LLM in v1.
 
-**Why:** continuous spawning is what actually gives "rate" meaning, and —
-checked directly rather than assumed — it also resolves #12's
-flat-fitness-landscape problem without needing threat movement: new danger
-keeps arriving regardless of where the fly currently sits, so the
-"retreat once, safe forever" fixed point goes away on its own. Bounded
+**Why:** continuous spawning is what actually gives "rate" meaning. Bounded
 ranges structurally enforce that the adversary can't trivialize the game.
 Pulled Crafter's actual `worldgen.py` source as a comparison point before
 assuming it might already offer this: it generates everything once at
@@ -265,3 +261,45 @@ world creation with hardcoded probability constants (`uniform() > 0.993`
 for zombies), not a runtime-adjustable rate — confirming this needs a real
 mechanic change on our side, not something an existing engine already
 provides.
+
+**Correction (see #15):** this entry originally also claimed continuous
+spawning alone resolves #12's flat-fitness problem. That claim was
+asserted without being tested and turned out to be wrong — see #15 for
+the measurement and the actual fix.
+
+## 15. Continuous spawning alone did NOT fix #12 — threats needed to move
+
+**Context:** #14 assumed continuous spawning would remove the "retreat
+once, safe forever" fixed point on its own. Tested directly instead of
+taking that on faith.
+
+**What was measured:** with continuous spawning active (`spider_spawn_rate
+0.08, max_spiders=6`), the untrained circuit's death rate over 60 episodes
+was still 0%, identical to the pre-#14 static-placement result. Raising
+density to the extreme (`max_spiders=25`, ~25% of a 10×10 grid) only
+reached 5% — the same order of magnitude as the densest config already
+ruled out under #12. Root cause: new spiders deliberately never spawn on
+the fly's current cell, and — unchanged from #12 — spiders still didn't
+move once placed. So each individually-spawned spider remained a one-time,
+permanently-dodgeable event; more of them accumulating over time doesn't
+change that, since the fly can still retreat from each in turn and freeze.
+Continuous spawning fixed what it was actually designed to fix (giving
+"rate" a meaning at all) but not the thing #14 additionally assumed it
+would fix.
+
+**Decision:** added threat movement after all — the original leading
+candidate from #12, before the vision pivot temporarily sidelined it.
+Each tick, every `Threat` has `threat_move_probability` chance of taking
+one random step (bounded to the grid, allowed to land on the fly's cell —
+that's the actual kill mechanism now). Tuned empirically: `0.3` gave a
+12% death rate with real spread (std ≈ 10 ticks) over 60 episodes;
+`0.5` gave less (3/60) — plausibly because faster-moving threats trigger
+the escape circuit's reaction more reliably. `0.3` is now the default and
+the stage-1 curriculum value.
+
+**Verified fix:** re-ran the actual ES training loop (not just the
+death-rate probe) — `population_reward_std` is now consistently nonzero
+every iteration (range ≈3.5–10.1 across 15 iterations), and fitness
+climbs from a 73.3 baseline toward the episode ceiling. `decisions.md`
+#12 is genuinely resolved now, confirmed by running the real training
+loop, not inferred from the mechanic change alone.
