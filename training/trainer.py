@@ -29,16 +29,22 @@ logger = logging.getLogger(__name__)
 
 
 def rollout(agent: EscapeAgent, env: Environment) -> float:
-    obs = env.reset()
+    """Curriculum training always runs a population of 1 (reproduction is
+    structurally impossible there -- mate_availability is 0 at population
+    1, see wiki/decisions.md #20), so there's always exactly one fly to
+    drive each tick.
+    """
+    observations = env.reset()
     agent.reset()
-    total_reward = 0.0
-    done = False
-    while not done:
-        result = env.step(agent.act(obs))
-        obs = result.observation
-        total_reward += result.reward
-        done = result.done
-    return total_reward
+    ticks_survived = 0.0
+    while observations:
+        actions = {fly_id: agent.act(obs) for fly_id, obs in observations.items()}
+        result = env.step(actions)
+        ticks_survived += 1.0
+        observations = result.observations
+        if result.colony_extinct or result.timed_out:
+            break
+    return ticks_survived
 
 
 def evaluate(agent: EscapeAgent, env: Environment, episodes: int) -> float:

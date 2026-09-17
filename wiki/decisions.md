@@ -416,3 +416,73 @@ precomputed static replay).
 the frontend against game mechanics that don't exist yet means building
 against a moving target — same "prove the simple version first" discipline
 used throughout this project. Not started.
+
+## 20. Reproduction: multi-fly `Environment`, random event, real cost
+
+**Context:** implementing reproduction (design worked out in conversation,
+not restated here) required a structural change first: `Environment` only
+ever tracked one fly. A colony needs many flies alive at once, sharing the
+same spiders/food/director pressure — not N separate single-fly worlds.
+
+**Decision — multi-fly `Environment`:** `self.fly_pos`/`self.hunger`
+replaced with `self.flies: list[Fly]` (new DTO in `entities.py`: id,
+position, hunger, `vulnerable_ticks_left`). `reset()` now takes no
+per-call args (population comes from the `initial_population` constructor
+kwarg) and returns `dict[fly_id, Observation]`; `step()` takes
+`dict[fly_id, Action]` (one per living fly, raises if any is missing) and
+returns a new `ColonyStepResult` DTO (`observations`, `deaths: dict[id,
+cause]`, `births: dict[new_id, parent_id]`, `colony_extinct`,
+`timed_out`). `sense_nearest`/`observe` now take an explicit fly instead
+of reading `self.fly_pos` implicitly.
+
+**Why this doesn't break the existing ES curriculum training:** a
+population of 1 makes reproduction structurally impossible — see the
+formula below, `mate_availability` is exactly 0 at population 1 — so
+`training/trainer.py`'s `rollout()` (updated to the dict-based API, still
+always exactly one fly per tick) behaves identically in spirit to before.
+No separate single-fly code path needed; same "one parameterized class,
+different configs" discipline as everything else here.
+
+**Decision — the reproduction mechanic**, exactly as designed in
+conversation: not an action the trained circuit decides (no new `Action`
+member; parallel to how food pickup and spider spawning already aren't
+agent decisions either) — a world-level stochastic event, checked every
+tick per living fly:
+
+```
+if hunger_fraction > reproduction_hunger_threshold and population < max_population:
+    mate_availability = min(max_mate_availability, (population - 1) / (max_population - 1))
+    probability = base_reproduction_rate * mate_availability
+    # roll probability; on success:
+    #   parent.hunger *= (1 - reproduction_hunger_cost_fraction)
+    #   parent.vulnerable_ticks_left = reproduction_vulnerability_ticks  (forces STAY, overriding any requested action)
+    #   offspring spawns near parent, hunger = max
+```
+
+Selection is purely differential, not reward-shaped: a better escape
+circuit survives longer, which means more per-tick reproduction rolls
+over its lifetime, which means more offspring on average — no fitness
+term added to the reproduction probability itself (would be redundant
+with, and would distort, that already-existing signal). `population`
+used in the formula is colony-wide, not spatial proximity — a deliberate,
+cheaper stand-in for "a mate needs to be nearby" that a reviewer flagged
+as the harder version to defer, not build now. `max_mate_availability`
+(< 1) guarantees the probability can never reach certainty even at full
+capacity — added specifically so a kill near the population cap doesn't
+create a near-guaranteed immediate replacement, which would make kills
+near capacity feel like they don't matter.
+
+**Verified:** every mechanic tested in isolation directly against
+`Environment` (not just "should work") — population-1 reproduction is
+provably impossible even at `base_reproduction_rate=1.0`; reproduction
+fires and respects the `max_population` cap under direct test; parent
+hunger cost and `vulnerable_ticks_left` are applied and actually force
+`STAY` the following tick even when a different action is requested;
+per-fly threat/starvation death still work (one test initially used a
+non-moving threat against a stationary fly and — as expected from
+`decisions.md` #12/#15 — never killed it, which is correct behavior, not
+a bug, and was fixed by moving the threat, not the code). Full ES
+training re-run end to end: real nonzero `population_reward_std` every
+iteration preserved, fitness still climbs to the episode ceiling — the
+baseline shifted slightly (78.5 vs. the earlier 73.3) from the RNG draw
+sequence changing under the refactor, not from any behavior change.

@@ -26,3 +26,11 @@ class Food:
 class Threat:
     position: Position
     sense_radius: float
+
+
+@dataclass
+class Fly:
+    id: int
+    position: Position
+    hunger: int
+    vulnerable_ticks_left: int = 0  # >0 while recovering from reproduction; forces STAY

@@ -12,14 +12,15 @@ see #13 for why that was dropped.
 |---|---|
 | Connectome data access (`fly_brain/data.py`) | done |
 | Connectome exploration (`analyze`, `simulate` commands) | done |
-| `world/env.py` — continuous spawn-rate params + threat movement | done, tested (`decisions.md` #14, #15) |
+| `world/env.py` — multi-fly, continuous spawn-rate params, threat movement | done, tested (`decisions.md` #14, #15, #20) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
 | `training/trainer.py` / `training/run.py` — ES training loop | done, mechanically tested |
 | Stage 1 training run (clean escape) | **unblocked and verified** — real `population_reward_std` every iteration (`decisions.md` #15); 15-iteration smoke test only, a longer real run is still future work |
 | `director/` — swappable LLM world-controller layer | done; registry → rule-based controller → `Environment` verified end to end; `ClaudeController` built to spec but **not tested live** (no API credentials in this environment) — see `decisions.md` #16 |
-| Reproduction mechanic (offspring = parent gains + ES perturbation, survival = selection) | designed in #13, not implemented — **current focus** |
+| Reproduction mechanic — multi-fly `Environment`, stochastic trigger, parent cost | **done, tested** (`decisions.md` #20) |
+| `training/colony.py` — per-fly circuits/genomes, offspring genome creation, live colony loop | not started — **current focus** |
 | Stage 2 / stage 3 (noisy escape, forage transfer) | not started |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
@@ -34,7 +35,12 @@ see #13 for why that was dropped.
    registry + `RuleBasedController` verified end to end. **Still needed:
    a live test of `ClaudeController` with a real API key** (not possible
    in this environment).
-4. Reproduction mechanic from #13.
+4. ~~Reproduction mechanic~~ done — see `decisions.md` #20.
+5. `training/colony.py`: wire real per-fly circuits/genomes to the
+   multi-fly `Environment` — offspring get parent's `synaptic_gain` +
+   Gaussian noise on birth, each living fly acts via its own agent
+   instance each tick. This is what turns the tested mechanic into an
+   actually-playable live colony.
 
 ## After that
 

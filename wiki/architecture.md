@@ -23,22 +23,31 @@ verified before being wired together.
 
 ## `world/` — the game
 
-- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`. No
-  behavior, just data.
-- **`env.py`** — the `Environment` class. Fixed-size grid, a hunger bar
-  that depletes every tick. Food and threats spawn continuously (not
-  placed once at reset) at `spider_spawn_rate`/`food_spawn_rate`, and
-  threats wander (`threat_move_probability` chance of a random step per
-  tick) — both needed for the escape circuit to have real, ongoing
-  pressure to react to rather than a one-time, permanently-dodgeable
-  placement (see `decisions.md` #14, #15). `increase_/decrease_spider_rate`
-  and `increase_/decrease_food_rate` are the only way those rates change —
+- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`,
+  `Fly` (id, position, hunger, `vulnerable_ticks_left`). No behavior,
+  just data.
+- **`env.py`** — the `Environment` class, multi-fly: `self.flies:
+  list[Fly]` share one grid, one set of spiders/food, one hunger clock
+  each. Food and threats spawn continuously (not placed once at reset) at
+  `spider_spawn_rate`/`food_spawn_rate`, and threats wander
+  (`threat_move_probability` chance of a random step per tick) — both
+  needed for the escape circuit to have real, ongoing pressure to react
+  to rather than a one-time, permanently-dodgeable placement (see
+  `decisions.md` #14, #15). Flies reproduce — a world-level stochastic
+  event, not an agent decision, gated by hunger + a population-based
+  `mate_availability` factor, with a real cost to the parent (hunger +
+  a forced-`STAY` vulnerability window); see `decisions.md` #20 for the
+  formula. `increase_/decrease_spider_rate` and
+  `increase_/decrease_food_rate` are the only way those rates change —
   the control surface `director/` calls into. Exposes a Gym-style
-  interface: `reset() -> Observation`,
-  `step(action) -> StepResult(observation, reward, done, cause)`.
-  Curriculum-friendly by construction — `food_enabled` / `threats_enabled`
-  flags mean later training stages configure this one class differently
-  rather than needing separate environment implementations.
+  interface: `reset() -> dict[fly_id, Observation]`,
+  `step(actions: dict[fly_id, Action]) -> ColonyStepResult(observations,
+  deaths, births, colony_extinct, timed_out)`. A population of 1 makes
+  reproduction structurally impossible (the formula), which is exactly
+  the single-fly curriculum-training case — one class serves both, no
+  separate single-fly environment. `food_enabled` / `threats_enabled`
+  flags mean training stages configure this one class differently rather
+  than needing separate environment implementations.
 
 The `Observation` the environment exposes is a fixed 7-value vector:
 `food_signal, food_dx, food_dy, threat_signal, threat_dx, threat_dy,
@@ -106,12 +115,12 @@ see `decisions.md` #16 for why each piece is split the way it is.
 - **`claude_controller.py`** — the reference LLM backend: real tool-use
   (each action is a zero-argument tool), not free-text parsing.
 
-## Data flow through one tick
+## Data flow through one tick (per fly)
 
 ```
-Environment.step(action) -> Observation
+Environment.step({fly_id: action, ...}) -> ColonyStepResult.observations[fly_id]
         |
-EscapeAgent.act(Observation)
+EscapeAgent.act(Observation)      (that fly's own circuit/gains)
         |
    inject threat_signal as current into DNp01
         |
@@ -122,6 +131,11 @@ EscapeAgent.act(Observation)
         v
       Action  ->  Environment.step() on the next tick
 ```
+
+(Curriculum training always runs a population of 1, so this collapses to
+exactly one fly per tick, same shape as before multi-fly support existed.
+A live colony repeats this per living fly each tick — driving each fly
+with its own circuit/genome is `training/colony.py`'s job, not yet built.)
 
 ## How a player's request changes the world
 
