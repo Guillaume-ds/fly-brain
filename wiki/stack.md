@@ -10,6 +10,17 @@ concrete needs it.
 | **matplotlib** | plots (`analyze`, `simulate` output) | standard, no reason to reach for anything else for static charts |
 | **requests / tqdm** | downloading connectome files with a progress bar | small, no-auth HTTP GETs against a public bucket — nothing fancier needed |
 
+## Frontend/serving — decided, not yet built (see `decisions.md` #19)
+
+Sequenced deliberately after the core Python game loop (reproduction
+mechanic, live director loop) is working — see #19 for why.
+
+| Tool | Role |
+|---|---|
+| **FastAPI + WebSocket** | Python backend: streams `Environment` state out as JSON each tick, routes player requests into `director/`. Needs a persistent process (not serverless) — WebSocket requires a long-lived connection. |
+| **Next.js + TypeScript** | Frontend app shell — chosen because it's what's already known well, lowering friction. Deployable to Vercel; the Python backend is hosted separately. |
+| **Phaser 3** | The actual canvas/tile rendering, mounted client-only inside one Next.js component (`"use client"` + `next/dynamic({ssr: false})` — Phaser touches `window`/canvas, which don't exist during Next's server render). Chosen over hand-rolling Canvas draws or Pygame: built specifically for 2D tile games (tilemaps, sprite animation, camera, particles included), and browser deployment rules out Pygame regardless (Python doesn't run natively in a browser; Pyodide was considered and rejected — heavy given pandas/numpy/pyarrow and the connectome data, and ES training wants many fast server-side rollouts, not client-side ones). |
+
 ## Deliberately not used (yet)
 
 - **No deep learning framework (PyTorch/JAX) yet.** Evolution Strategies
@@ -22,9 +33,6 @@ concrete needs it.
   this project is understanding the mechanics directly — ES and REINFORCE
   are both simple enough to write by hand, and doing so is the actual
   learning goal, not just the fastest path to a working policy.
-- **No game engine / pygame yet.** The environment is a plain grid with no
-  rendering needs so far; visualization (if added) will be a separate,
-  optional module (`world/render.py`), not a dependency of the core sim.
 - **No neuprint-python / API token.** Everything used so far comes from
   the public, no-auth flat files in the GCS bucket — see `decisions.md`
   for why that path was chosen over the authenticated API.

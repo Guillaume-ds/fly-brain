@@ -392,3 +392,27 @@ ES training run after the refactor — all produced identical output to the
 pre-refactor runs (same baseline fitness 73.3, same neuron counts, same
 spike patterns), confirming this was a pure readability pass with no
 behavior change.
+
+## 19. Rendering: Python backend + Next.js/TypeScript/Phaser frontend
+
+**Context:** worried the 2D "Terraria-like" tile aesthetic wouldn't work
+well in Python, and separately wanted browser playability.
+
+**Decision:** the rendering worry and the browser-deployment goal turned
+out to be the same decision, not two — Python doesn't run natively in a
+browser, so browser access effectively requires a JS/TS frontend
+regardless of how good Python's own 2D rendering could be. Split:
+`fly_brain/`, `world/`, `director/`, `training/` stay exactly as they are
+(Python, unchanged) as a backend; a new FastAPI + WebSocket layer streams
+`Environment` state out as JSON and routes player requests in; a Next.js
++ TypeScript frontend (chosen for existing familiarity, not re-litigated
+against alternatives) hosts a Phaser 3 canvas for the actual tile
+rendering. See `stack.md` for the full breakdown including the two
+alternatives considered and rejected (Pyodide/WASM Python-in-browser;
+precomputed static replay).
+
+**Sequencing:** deliberately deferred until the core Python game loop
+(reproduction mechanic, a live director loop) works end to end. Building
+the frontend against game mechanics that don't exist yet means building
+against a moving target — same "prove the simple version first" discipline
+used throughout this project. Not started.
