@@ -1,5 +1,13 @@
 # kill-the-flies wiki
 
+## Goal
+
+The user must kill every fly in a colony. The flies live in a persistent
+environment and learn (via RL, on the real connectome) how to survive in
+it. The user doesn't act on the flies directly — they control the
+*environment* around them, through an LLM, to make survival as hard as
+possible.
+
 This is a working wiki, not a polished writeup — it's maintained turn by
 turn as the project develops, so it stays an accurate source of truth for
 "how does this work" and "why did we do it this way," not a snapshot from
