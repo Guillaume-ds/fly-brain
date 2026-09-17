@@ -1,5 +1,10 @@
 # fly-brain
 
+> This project is growing beyond the exploration tools below into training
+> the real connectome (via RL) to survive in a small game world. See
+> **[wiki/](wiki/README.md)** for the architecture, the stack, and a running
+> log of the decisions behind it.
+
 Small project for exploring and playing with the **MaleCNS connectome** — the
 complete wiring diagram of an adult male fruit fly's central nervous system,
 released in September 2026 by HHMI Janelia (FlyEM), Google Research, the
