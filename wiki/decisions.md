@@ -210,12 +210,58 @@ makes the fly retreat a bit further before permanently stopping. Since
 nearly every rollout in a population scores identically (full survival),
 ES has no fitness variance to compute an update from.
 
-**Status: unresolved, needs a decision before stage 1 can actually train.**
-Leading candidate: give threats a small per-tick random-walk movement, so
-a threat can close distance again after the fly retreats — removes the
-"freeze forever" escape hatch and makes survival depend on sustained
-reaction rather than one correct move. This would extend `Threat` (in
-`world/entities.py`) and `Environment.step()` (in `world/env.py`) beyond
-what was reviewed when those were built as static placements. Alternatives
-not yet ruled out: a standing-still cost, or pulling hunger-driven
-movement forward from stage 3. Not implemented pending that decision.
+**Status: resolved by #14 below** — continuous spawning (not threat
+movement) turned out to be the fix, arrived at via the vision pivot in
+#13 rather than by directly patching this. Threat movement, a
+standing-still cost, and pulling hunger-driven movement forward were the
+three candidates on the table; none were needed in the end.
+
+## 13. Vision pivot: adversarial colony-survival, not construction
+
+**Context:** exploring a "Minecraft-like" building game surfaced a real
+tension: no real Drosophila circuit does construction, so extending the
+fly brain to cover building would mean either inventing a fictional
+module disconnected from actual neuroscience, or leaving the game's
+flashiest mechanic with no connection to the trained brain at all.
+
+**Decision:** drop "building." New v1 vision: a human (via an LLM
+translator) tries to wipe out a fly colony by adjusting world generation
+— specifically, spider and food spawn rates. The colony survives via the
+trained real connectome and reproduces under that pressure.
+
+**Why:** keeps the fly honest — survival and foraging only, nothing
+invented — and reframes the "opponent" as a cleanly separate system (world
+generation) rather than something the fly itself has to do. The
+predator-pressure-drives-selection framing is literally natural selection,
+a better narrative fit than building ever was, not a compromise forced by
+dropping scope. Also considered: reproduction-as-gameplay should reuse the
+existing ES mechanics directly (offspring = parent's `synaptic_gain` plus
+ES's own perturbation step; survival = the fitness/selection signal) rather
+than inventing a separate breeding system — not yet implemented, noted
+here as the intended design.
+
+## 14. v1 world-generation contract: two independent, bounded spawn-rate knobs
+
+**Decision:** `Environment` gains two continuous per-tick spawn-rate
+parameters — `spider_spawn_rate`, `food_spawn_rate` — each bounded to a
+fixed range, replacing the current fixed-count-at-reset placement.
+"Spider" is the existing `Threat` (instant death on contact) — no
+web/immobilize mechanic yet (planned for v2, dropped by spiders on death).
+The two rates are controlled independently (not collapsed into one
+composite "difficulty" dial — considered, rejected in favor of keeping
+spider pressure and food scarcity separately tunable). Nothing else (grid
+size, hunger depletion, sensing radii, contact rule, *where* something
+spawns) is exposed to the user/LLM in v1.
+
+**Why:** continuous spawning is what actually gives "rate" meaning, and —
+checked directly rather than assumed — it also resolves #12's
+flat-fitness-landscape problem without needing threat movement: new danger
+keeps arriving regardless of where the fly currently sits, so the
+"retreat once, safe forever" fixed point goes away on its own. Bounded
+ranges structurally enforce that the adversary can't trivialize the game.
+Pulled Crafter's actual `worldgen.py` source as a comparison point before
+assuming it might already offer this: it generates everything once at
+world creation with hardcoded probability constants (`uniform() > 0.993`
+for zombies), not a runtime-adjustable rate — confirming this needs a real
+mechanic change on our side, not something an existing engine already
+provides.
