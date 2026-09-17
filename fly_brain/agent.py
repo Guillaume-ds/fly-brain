@@ -7,16 +7,24 @@ are part of Observation but unused here (the foraging pathway is a
 separate later addition, see wiki/roadmap.md). Whether to flee is the
 trained part (TTMn spiking); which direction is plain geometry, not the
 circuit's decision -- see wiki/decisions.md for why.
+
+Circuit-building (loading the connectome, expanding the circuit, finding
+seed/motor neurons) is expensive and identical for every fly of the same
+seed_type -- separated into EscapeCircuitTemplate so a colony of many
+flies builds it once and each fly gets a cheap EscapeAgent instance with
+its own Circuit state (genome via set_params(), membrane potential).
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from world.env import Action, Observation
 
-from .circuit import Circuit, build_circuit
+from .circuit import Circuit, CircuitBlueprint, build_circuit
 from .data import load_connectome_data
 
 MOTOR_TYPE = "TTMn"
@@ -29,39 +37,54 @@ def flee_direction(threat_dx: float, threat_dy: float) -> Action:
     return Action.DOWN if flee_dy > 0 else Action.UP
 
 
+def neuron_indices_of_type(
+    neuron_ids: list[int], type_of: pd.Series, index_of: dict[int, int], target_type: str, required: bool = False
+) -> list[int]:
+    matching = [body_id for body_id in neuron_ids if type_of[body_id] == target_type]
+    if required and not matching:
+        raise ValueError(
+            f"No '{target_type}' neuron in the built circuit -- increase hops/max_neurons "
+            f"so the escape pathway actually reaches a motor neuron."
+        )
+    return [index_of[body_id] for body_id in matching]
+
+
+@dataclass
+class EscapeCircuitTemplate:
+    blueprint: CircuitBlueprint
+    neurotransmitters: pd.Series
+    seed_idx: list[int]
+    motor_idx: list[int]
+
+
+def build_escape_template(
+    seed_type: str = "DNp01",
+    hops: int = 2,
+    max_neurons: int = 60,
+    edges_per_hop: int = 300,
+) -> EscapeCircuitTemplate:
+    connectome = load_connectome_data()
+    blueprint = build_circuit(
+        connectome.weights, connectome.annotations, seed_type,
+        hops=hops, max_neurons=max_neurons, edges_per_hop=edges_per_hop,
+    )
+    type_of = connectome.annotations.set_index("bodyId")["type"].reindex(blueprint.neuron_ids)
+    index_of = {body_id: i for i, body_id in enumerate(blueprint.neuron_ids)}
+
+    seed_idx = neuron_indices_of_type(blueprint.neuron_ids, type_of, index_of, seed_type)
+    motor_idx = neuron_indices_of_type(blueprint.neuron_ids, type_of, index_of, MOTOR_TYPE, required=True)
+    return EscapeCircuitTemplate(
+        blueprint=blueprint, neurotransmitters=connectome.neurotransmitters,
+        seed_idx=seed_idx, motor_idx=motor_idx,
+    )
+
+
 class EscapeAgent:
-    def __init__(
-        self,
-        seed_type: str = "DNp01",
-        hops: int = 2,
-        max_neurons: int = 60,
-        edges_per_hop: int = 300,
-        stim_gain: float = 1.5,
-    ) -> None:
-        connectome = load_connectome_data()
-        blueprint = build_circuit(
-            connectome.weights, connectome.annotations, seed_type,
-            hops=hops, max_neurons=max_neurons, edges_per_hop=edges_per_hop,
-        )
-        self.circuit = Circuit(blueprint, connectome.neurotransmitters)
+    def __init__(self, template: EscapeCircuitTemplate, stim_gain: float = 1.5) -> None:
+        self.circuit = Circuit(template.blueprint, template.neurotransmitters)
         self.stim_gain = stim_gain
-
-        type_of = connectome.annotations.set_index("bodyId")["type"].reindex(blueprint.neuron_ids)
-        self.seed_idx = self.neuron_indices_of_type(blueprint.neuron_ids, type_of, seed_type)
-        self.motor_idx = self.neuron_indices_of_type(
-            blueprint.neuron_ids, type_of, MOTOR_TYPE, required=True
-        )
-
-    def neuron_indices_of_type(
-        self, neuron_ids: list[int], type_of: pd.Series, target_type: str, required: bool = False
-    ) -> list[int]:
-        matching = [body_id for body_id in neuron_ids if type_of[body_id] == target_type]
-        if required and not matching:
-            raise ValueError(
-                f"No '{target_type}' neuron in the built circuit -- increase hops/max_neurons "
-                f"so the escape pathway actually reaches a motor neuron."
-            )
-        return [self.circuit.index_of[body_id] for body_id in matching]
+        self.seed_idx = template.seed_idx
+        self.motor_idx = template.motor_idx
 
     def reset(self) -> None:
         self.circuit.reset()

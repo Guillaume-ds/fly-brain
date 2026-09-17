@@ -74,13 +74,20 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   a `synaptic_gain` multiplier (init `1.0`), which is the one thing
   training is allowed to touch — see `decisions.md` on why topology/sign
   stay fixed.
-- **`agent.py`** — `EscapeAgent` wraps a `Circuit` as a policy for the
-  survival task. Seeds on `DNp01` (the Giant Fiber), injects
-  `threat_signal` as stimulus current into it, and checks whether the real
+- **`agent.py`** — `build_escape_template()` does the expensive, shared
+  part once (load the connectome, expand the circuit, find the seed/motor
+  neuron indices) and returns an `EscapeCircuitTemplate`; `EscapeAgent
+  (template)` is cheap — a fresh `Circuit` off that shared blueprint, so a
+  colony of many flies builds the connectome/topology once and stamps out
+  one lightweight agent per fly. `EscapeAgent` wraps that `Circuit` as a
+  policy for the survival task: injects `threat_signal` as stimulus
+  current into `DNp01` (the Giant Fiber), and checks whether the real
   downstream `TTMn` neuron (the jump-muscle motor neuron) spikes to decide
   *whether* to flee. *Which direction* to flee is plain geometry (away
   from the threat), computed outside the circuit — not something the
-  circuit decides. See `decisions.md` for why that split exists.
+  circuit decides. See `decisions.md` for why that split exists. No
+  foraging behavior yet — food/hunger are part of `Observation` but
+  unused here; a fly only eats what it happens to wander into.
 - **`analyze.py` / `simulate.py`** — the original standalone
   exploration/demo commands (`python -m fly_brain analyze|simulate`),
   independent of the survival-game project; still useful for poking at the
@@ -95,6 +102,17 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   vector). Rewards standardized per iteration.
 - **`run.py`** — CLI (`python -m training.run --stage 1`); checkpoints to
   `training/checkpoints/` (gitignored).
+- **`colony.py`** — `Colony` glues `Environment`'s multi-fly reproduction
+  mechanic to real `fly_brain` circuits: `dict[fly_id, EscapeAgent]`, one
+  per living fly. Each tick every fly acts via its own agent; each birth
+  gets a new agent whose genome is the parent's `get_params()` plus
+  Gaussian noise (`mutation_sigma`); each death deletes that fly's agent.
+  `load_starting_gains()` seeds the colony from a trained ES checkpoint
+  when available, or untrained (gain=1.0) otherwise.
+- **`colony_run.py`** — CLI (`python -m training.colony_run`) that runs a
+  colony headlessly and logs population/births/deaths — a cheap way to
+  watch it work before the real frontend exists, not the live game loop
+  itself (no `director/` involved yet).
 
 ## `director/` — the swappable LLM world-controller
 

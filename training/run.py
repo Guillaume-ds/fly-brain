@@ -8,7 +8,7 @@ import pathlib
 
 import numpy as np
 
-from fly_brain.agent import EscapeAgent
+from fly_brain.agent import EscapeAgent, build_escape_template
 from world.env import Environment
 
 from .curriculum import STAGES
@@ -57,7 +57,7 @@ def main() -> None:
     logger.info("Stage: %s  (%s)", stage.name, stage.env_kwargs)
 
     env = Environment(seed=args.seed, **stage.env_kwargs)
-    agent = EscapeAgent()
+    agent = EscapeAgent(build_escape_template())
 
     baseline = np.mean([rollout(agent, env) for _ in range(BASELINE_EPISODES)])
     logger.info("Untrained (real biology, gain=1.0) baseline fitness: %.1f", baseline)

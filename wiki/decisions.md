@@ -486,3 +486,46 @@ training re-run end to end: real nonzero `population_reward_std` every
 iteration preserved, fitness still climbs to the episode ceiling — the
 baseline shifted slightly (78.5 vs. the earlier 73.3) from the RNG draw
 sequence changing under the refactor, not from any behavior change.
+
+## 21. `training/colony.py`: real per-fly circuits/genomes wired to reproduction
+
+**Context:** #20 made the reproduction mechanic real at the `Environment`
+level, but flies had no actual brains — nothing decided their actions.
+
+**Decision:** first, a prerequisite refactor to `fly_brain/agent.py` —
+building a circuit (loading the connectome, expanding it, finding
+seed/motor neurons) is expensive and identical for every fly of the same
+`seed_type`; doing it once and stamping out many cheap instances needed
+splitting that from `EscapeAgent` itself. `EscapeCircuitTemplate` (+
+`build_escape_template()`) now holds the expensive, shared part;
+`EscapeAgent(template)` is cheap — just a fresh `Circuit` off the shared
+blueprint. `EscapeAgent`'s existing `set_params()` was already enough to
+give an instance its own genome; no constructor argument needed for that.
+
+`training/colony.py`'s `Colony` class owns `dict[fly_id, EscapeAgent]`
+alongside the `Environment`. Each tick: every living fly acts via its own
+agent, `Environment.step()` resolves the world, then for each birth the
+parent's `get_params()` plus Gaussian noise (`mutation_sigma`, same idea
+as ES's `sigma`) becomes the offspring's genome via a fresh agent's
+`set_params()`; each death just deletes that fly's agent. Starting genome
+(`load_starting_gains`) comes from a trained ES checkpoint when one's
+given and exists, falling back to untrained (gain=1.0) otherwise — the
+"ES pretrains a starting gene pool, reproduction continues evolving it
+live" split from `decisions.md` #13, now actually wired up rather than
+just described. A small CLI (`training/colony_run.py`) runs a colony
+headlessly and logs population/births/deaths — the cheap "watch it work"
+checkpoint we agreed on before touching the frontend, not the real game
+loop (no `director/` involved yet).
+
+**Verified:** unit-tested directly against `Colony` — birth creates a new
+agent with genuinely mutated (not identical) params and keeps
+`colony.agents` in sync with living flies; death removes exactly that
+fly's agent, confirmed with real threat-caused deaths. Ran the actual CLI
+twice: once at `Environment`'s plain defaults (extinct by tick 115, pure
+starvation — expected, not a bug: `EscapeAgent`'s circuit only ever
+reacts to `threat_signal`, it has no foraging behavior at all yet, so a
+passive fly only survives on food it happens to wander into by luck), and
+once with more generous food settings, where a real, naturally-triggered
+birth (population 3→4 at tick 127) was observed before the colony still
+eventually went extinct through a mix of starvation and a threat kill —
+a full lifecycle, driven by a real trained circuit, no artificial forcing.
