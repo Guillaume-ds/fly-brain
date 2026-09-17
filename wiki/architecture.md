@@ -77,14 +77,36 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   independent of the survival-game project; still useful for poking at the
   raw connectome.
 
-## `training/` — not yet built
+## `training/` — the ES loop
 
-Will hold `curriculum.py` (stage configs — which entities are enabled, at
-what difficulty) and `trainer.py` (the ES training loop: perturb
-`synaptic_gain`, roll out episodes via `Environment` + `EscapeAgent`,
-update toward higher survival time). See `roadmap.md`.
+- **`curriculum.py`** — stage configs as plain `Environment` kwargs (only
+  stage 1 defined so far).
+- **`trainer.py`** — Evolution Strategies (the OpenAI-ES update), operating
+  only on `EscapeAgent.get_params()`/`set_params()` (the `synaptic_gain`
+  vector). Rewards standardized per iteration.
+- **`run.py`** — CLI (`python -m training.run --stage 1`); checkpoints to
+  `training/checkpoints/` (gitignored).
 
-## Data flow through one tick, once training exists
+## `director/` — the swappable LLM world-controller
+
+Sits on top of `Environment`, not on top of the fly. A player's request
+gets translated into at most one call against a fixed action registry —
+see `decisions.md` #16 for why each piece is split the way it is.
+
+- **`actions.py`** — the registry: `ActionSpec(name, description, fn)`
+  wrapping `Environment.increase_/decrease_spider_rate` and
+  `increase_/decrease_food_rate`. No LLM-specific code — doesn't know
+  Claude or any other provider exists.
+- **`base.py`** — `WorldController`, a one-method interface
+  (`choose_action(request, actions) -> action name or None`). This is the
+  entire swap point.
+- **`rule_based_controller.py`** — zero-dependency keyword-match backend,
+  used to test the registry/`Environment` wiring for free before any real
+  model is involved.
+- **`claude_controller.py`** — the reference LLM backend: real tool-use
+  (each action is a zero-argument tool), not free-text parsing.
+
+## Data flow through one tick
 
 ```
 Environment.step(action) -> Observation
@@ -99,4 +121,19 @@ EscapeAgent.act(Observation)
         |
         v
       Action  ->  Environment.step() on the next tick
+```
+
+## How a player's request changes the world
+
+```
+player request (free text)
+        |
+WorldController.choose_action(request, registry)   <- Claude, rule-based, or any future backend
+        |
+   action name (or None)
+        |
+   registry[name].fn()   -> Environment.increase_/decrease_*_rate()
+        |
+        v
+  spider_spawn_rate / food_spawn_rate  ->  affects every future _spawn_tick()
 ```

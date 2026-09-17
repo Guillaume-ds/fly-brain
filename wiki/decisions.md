@@ -303,3 +303,28 @@ every iteration (range ≈3.5–10.1 across 15 iterations), and fitness
 climbs from a 73.3 baseline toward the episode ceiling. `decisions.md`
 #12 is genuinely resolved now, confirmed by running the real training
 loop, not inferred from the mechanic change alone.
+
+## 16. `director/` architecture: registry + swappable controller interface
+
+**Decision:** built as designed in the earlier discussion —
+`director/actions.py` holds `ActionSpec(name, description, fn)` entries
+wrapping `Environment`'s four rate methods (provider-agnostic, no LLM
+imports); `director/base.py` defines the one-method `WorldController`
+interface (`choose_action(request, actions) -> action name or None`);
+`director/rule_based_controller.py` is a zero-dependency keyword-match
+implementation; `director/claude_controller.py` is the reference LLM
+backend, using real tool-use (each action becomes a zero-argument tool)
+rather than parsing free-text output.
+
+**Verified:** registry → `RuleBasedController` → `Environment` tested end
+to end — correctly maps requests like "make it harder for the flies" to
+`increase_spider_rate` (and correctly returns `None` for unrelated
+requests like "what is the weather today"), with the rate actually
+changing on `Environment`. `ClaudeController` was verified to import,
+subclass `WorldController` correctly, and construct an `anthropic.Anthropic`
+client — but **not exercised against a live API**: no credentials were
+available in this environment (no `ANTHROPIC_API_KEY`, no `ant` CLI). A
+call without credentials fails client-side with `TypeError: Could not
+resolve authentication method...` (not `AuthenticationError` — that
+would require a bad-but-present key; here there's nothing to send at
+all). Needs testing with a real API key before relying on it.
