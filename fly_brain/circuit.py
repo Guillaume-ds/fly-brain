@@ -1,27 +1,31 @@
 """Build a small circuit from the real connectome and step it forward with a
-toy leaky integrate-and-fire (LIF) model.
-
-This is the piece originally written for the `simulate` terminal demo,
-pulled out here so agent.py can reuse the exact same mechanics instead of
-duplicating them. Same caveat as before: this is NOT a validated
-biophysical model -- synaptic sign is guessed from predicted
-neurotransmitter, weights are rescaled synapse counts, no real time
-constants. Good enough to carry real wiring into a trainable circuit; not a
-research-grade simulation.
-
-Trainable part: each synapse gets a `synaptic_gain` multiplier, initialized
-to 1.0 (so a fresh Circuit behaves exactly like the original untrained
-demo). Training (ES, later REINFORCE) only ever adjusts these gains --
-topology and sign stay fixed, exactly as decided: real wiring is kept,
-only synaptic strength is learned.
+toy leaky integrate-and-fire (LIF) model. NOT a validated biophysical model
+-- see wiki/stack.md and wiki/decisions.md for the caveats and for what
+training is/isn't allowed to touch (only synaptic_gain; topology and sign
+stay fixed).
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 INHIBITORY_NT = {"gaba"}
+
+
+@dataclass(frozen=True)
+class SynapseEdge:
+    pre_body_id: int
+    post_body_id: int
+    weight: int
+
+
+@dataclass(frozen=True)
+class CircuitBlueprint:
+    neuron_ids: list[int]
+    edges: list[SynapseEdge]
 
 
 def build_circuit(
@@ -31,10 +35,10 @@ def build_circuit(
     hops: int = 2,
     max_neurons: int = 80,
     edges_per_hop: int = 300,
-) -> tuple[list[int], list[tuple[int, int, int]]]:
+) -> CircuitBlueprint:
     """Expand outward from all neurons of `seed_type`, following the
     strongest outgoing connections, up to `hops` hops and `max_neurons`
-    neurons total. Returns (neuron body ids, (pre, post, weight) edges).
+    neurons total.
     """
     seeds = annotations.loc[annotations["type"] == seed_type, "bodyId"].tolist()
     if not seeds:
@@ -47,7 +51,7 @@ def build_circuit(
 
     visited = set(seeds)
     frontier = set(seeds)
-    edges: list[tuple[int, int, int]] = []
+    edges: list[SynapseEdge] = []
 
     for _ in range(hops):
         if len(visited) >= max_neurons:
@@ -58,14 +62,14 @@ def build_circuit(
         for row in hop.itertuples(index=False):
             if len(visited) + len(next_frontier) >= max_neurons and row.body_post not in visited:
                 continue
-            edges.append((row.body_pre, row.body_post, row.weight))
+            edges.append(SynapseEdge(row.body_pre, row.body_post, row.weight))
             if row.body_post not in visited:
                 next_frontier.add(row.body_post)
         visited |= next_frontier
         frontier = next_frontier
 
-    edges = [e for e in edges if e[0] in visited and e[1] in visited]
-    return sorted(visited), edges
+    edges = [e for e in edges if e.pre_body_id in visited and e.post_body_id in visited]
+    return CircuitBlueprint(neuron_ids=sorted(visited), edges=edges)
 
 
 class Circuit:
@@ -73,32 +77,35 @@ class Circuit:
 
     def __init__(
         self,
-        neurons: list[int],
-        edges: list[tuple[int, int, int]],
+        blueprint: CircuitBlueprint,
         neurotransmitters: pd.Series,
         threshold: float = 1.0,
         leak: float = 0.85,
         propagation_gain: float = 1.5,
     ) -> None:
-        self.neurons = neurons
-        self.index_of = {b: i for i, b in enumerate(neurons)}
-        self.n = len(neurons)
+        self.neurons = blueprint.neuron_ids
+        self.index_of = {body_id: i for i, body_id in enumerate(self.neurons)}
+        self.n = len(self.neurons)
         self.threshold = threshold
         self.leak = leak
         self.propagation_gain = propagation_gain
 
-        max_w = max((e[2] for e in edges), default=1)
-        pre, post, base_weight = [], [], []
-        for body_pre, body_post, weight in edges:
-            sign = -1.0 if neurotransmitters.get(body_pre) in INHIBITORY_NT else 1.0
-            pre.append(self.index_of[body_pre])
-            post.append(self.index_of[body_post])
-            base_weight.append(sign * (weight / max_w))
-        self._edge_pre = np.array(pre, dtype=int)
-        self._edge_post = np.array(post, dtype=int)
-        self._edge_base_weight = np.array(base_weight, dtype=float)
+        max_weight = max((edge.weight for edge in blueprint.edges), default=1)
+        pre_indices, post_indices, base_weights = [], [], []
+        for edge in blueprint.edges:
+            sign = -1.0 if neurotransmitters.get(edge.pre_body_id) in INHIBITORY_NT else 1.0
+            pre_indices.append(self.index_of[edge.pre_body_id])
+            post_indices.append(self.index_of[edge.post_body_id])
+            base_weights.append(sign * (edge.weight / max_weight))
 
-        self.synaptic_gain = np.ones(len(edges))  # trainable, one per synapse
+        # Derived, tightly-coupled internal wiring -- kept private on purpose:
+        # nothing outside Circuit should touch these directly, only
+        # synaptic_gain is meant to be read/written (via get_params/set_params).
+        self._edge_pre = np.array(pre_indices, dtype=int)
+        self._edge_post = np.array(post_indices, dtype=int)
+        self._edge_base_weight = np.array(base_weights, dtype=float)
+
+        self.synaptic_gain = np.ones(len(blueprint.edges))  # trainable, one per synapse
         self.reset()
 
     def reset(self) -> None:
@@ -131,9 +138,7 @@ class Circuit:
     def set_params(self, theta: np.ndarray) -> None:
         theta = np.asarray(theta, dtype=float)
         if theta.shape != self.synaptic_gain.shape:
-            raise ValueError(
-                f"expected {self.synaptic_gain.shape} params, got {theta.shape}"
-            )
+            raise ValueError(f"expected {self.synaptic_gain.shape} params, got {theta.shape}")
         self.synaptic_gain = theta
 
     @property

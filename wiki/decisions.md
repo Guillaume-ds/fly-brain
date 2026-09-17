@@ -345,3 +345,50 @@ for a cosmetic reason.
 manual rename via GitHub Settings. The README's clone URL is left
 pointing at the current, working repo name until that happens, to avoid
 a broken link in the meantime.
+
+## 18. Code-quality pass: DTOs, logging, function splits, less privacy
+
+**Decision:** reviewed every module against four rules — no unnecessary
+`_private` naming, no long comments (rely on this wiki for rationale
+instead of duplicating it in docstrings), no `print()` in library code
+(use `logging` instead), carry data around as dataclasses rather than
+bare tuples/dicts, and split up functions doing too many distinct things.
+
+**What changed:**
+- **DTOs**: `circuit.build_circuit()` used to return a bare
+  `tuple[list[int], list[tuple[int,int,int]]]`; now returns a
+  `CircuitBlueprint(neuron_ids, edges: list[SynapseEdge])`. Added
+  `data.ConnectomeData` bundling the three connectome DataFrames that
+  `agent.py` and `simulate.py` both load the same way (previously
+  duplicated inline in each). Added `world.SensorReading` and
+  `simulate.RasterResult` similarly.
+- **Logging**: every `print()` in `analyze.py`, `simulate.py`,
+  `trainer.py`, and `run.py` replaced with `logging`. Both CLI entry
+  points (`fly_brain/cli.py`, `training/run.py`) call
+  `logging.basicConfig(level=INFO, format="%(message)s")` so output still
+  reads exactly like the old prints did.
+- **Function splits**: `Environment.step()` was doing movement, spawning,
+  pickup, and episode-end all inline — split into named methods
+  (`move_fly`, `move_threats`, `spawn_entities`, `resolve_food_pickup`,
+  `determine_episode_end`) with `step()` left as a short orchestrator.
+  Same treatment for `analyze.run()` (→ `report_composition`,
+  `report_neurotransmitters`, `report_connectivity`,
+  `report_top_neurons`, plus pulling a nested closure out to a top-level
+  function), `simulate.run()` (→ `run_simulation`,
+  `report_most_active_neurons`, `save_raster_plot`), and
+  `trainer.train_es()` (→ `run_es_iteration` returning an
+  `ESIterationResult`, isolating the actual ES math from the
+  loop/logging).
+- **Privacy**: removed underscore-prefixing from methods that were just
+  internal decomposition, not genuinely dangerous state (e.g.
+  `Environment`'s helper methods, `agent.flee_direction`). Kept it only
+  where a real invariant would break if called externally: `Circuit`'s
+  derived `_edge_pre`/`_edge_post`/`_edge_base_weight` arrays, and
+  `data._download` (bypassing it skips `fetch()`'s cache check).
+
+**Verified:** every module still compiles and imports cleanly; re-ran
+`simulate`, `analyze`, `EscapeAgent` construction/`act()`, and a 5-iteration
+ES training run after the refactor — all produced identical output to the
+pre-refactor runs (same baseline fitness 73.3, same neuron counts, same
+spike patterns), confirming this was a pure readability pass with no
+behavior change.

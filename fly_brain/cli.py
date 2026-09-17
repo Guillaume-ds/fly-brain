@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 
 from . import analyze, data, simulate
 
 
 def main(argv: list[str] | None = None) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = argparse.ArgumentParser(prog="fly-brain", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 

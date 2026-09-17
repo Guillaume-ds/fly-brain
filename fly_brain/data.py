@@ -9,6 +9,7 @@ Browse: https://male-cns.janelia.org/download/
 from __future__ import annotations
 
 import pathlib
+from dataclasses import dataclass
 
 import pandas as pd
 import requests
@@ -80,3 +81,19 @@ def load_weights() -> pd.DataFrame:
     when actually needed (degree stats, building a circuit for simulation).
     """
     return pd.read_feather(fetch("weights"))
+
+
+@dataclass
+class ConnectomeData:
+    annotations: pd.DataFrame
+    neurotransmitters: pd.Series  # indexed by body id -> predicted neurotransmitter
+    weights: pd.DataFrame
+
+
+def load_connectome_data() -> ConnectomeData:
+    """Load the three connectome files circuit-building needs together."""
+    return ConnectomeData(
+        annotations=load_annotations(),
+        neurotransmitters=load_neurotransmitters().set_index("body")["predicted_nt"],
+        weights=load_weights(),
+    )

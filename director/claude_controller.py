@@ -27,25 +27,27 @@ SYSTEM_PROMPT = (
 )
 
 
+def build_tool_definitions(actions: list[ActionSpec]) -> list[dict]:
+    return [
+        {
+            "name": action.name,
+            "description": action.description,
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        }
+        for action in actions
+    ]
+
+
 class ClaudeController(WorldController):
     def __init__(self, client: anthropic.Anthropic | None = None) -> None:
         self.client = client or anthropic.Anthropic()
 
     def choose_action(self, request: str, actions: list[ActionSpec]) -> str | None:
-        tools = [
-            {
-                "name": a.name,
-                "description": a.description,
-                "input_schema": {"type": "object", "properties": {}, "required": []},
-            }
-            for a in actions
-        ]
-
         response = self.client.messages.create(
             model=MODEL,
             max_tokens=256,
             system=SYSTEM_PROMPT,
-            tools=tools,
+            tools=build_tool_definitions(actions),
             tool_choice={"type": "auto"},
             messages=[{"role": "user", "content": request}],
         )

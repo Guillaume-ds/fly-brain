@@ -12,8 +12,8 @@ from __future__ import annotations
 from .actions import ActionSpec
 from .base import WorldController
 
-_UP_WORDS = ("more", "increase", "harder", "raise")
-_DOWN_WORDS = ("less", "fewer", "decrease", "easier", "lower")
+UP_WORDS = ("more", "increase", "harder", "raise")
+DOWN_WORDS = ("less", "fewer", "decrease", "easier", "lower")
 
 
 class RuleBasedController(WorldController):
@@ -21,9 +21,9 @@ class RuleBasedController(WorldController):
         text = request.lower()
         subject = "food" if "food" in text else "spider"
 
-        if any(w in text for w in _UP_WORDS):
+        if any(w in text for w in UP_WORDS):
             direction = "increase"
-        elif any(w in text for w in _DOWN_WORDS):
+        elif any(w in text for w in DOWN_WORDS):
             direction = "decrease"
         else:
             return None

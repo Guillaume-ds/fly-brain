@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import pathlib
 
 import numpy as np
@@ -13,10 +14,13 @@ from world.env import Environment
 from .curriculum import STAGES
 from .trainer import ESConfig, rollout, train_es
 
+logger = logging.getLogger(__name__)
+
 CHECKPOINT_DIR = pathlib.Path(__file__).resolve().parent.parent / "training" / "checkpoints"
+BASELINE_EPISODES = 10
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", type=int, default=1, choices=sorted(STAGES))
     parser.add_argument("--iterations", type=int, default=50)
@@ -25,18 +29,11 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=0.05)
     parser.add_argument("--episodes-per-eval", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    stage = STAGES[args.stage]
-    print(f"Stage: {stage.name}  ({stage.env_kwargs})")
 
-    env = Environment(seed=args.seed, **stage.env_kwargs)
-    agent = EscapeAgent()
-
-    baseline = np.mean([rollout(agent, env) for _ in range(10)])
-    print(f"Untrained (real biology, gain=1.0) baseline fitness: {baseline:.1f}")
-
-    config = ESConfig(
+def build_es_config(args: argparse.Namespace) -> ESConfig:
+    return ESConfig(
         iterations=args.iterations,
         population=args.population,
         sigma=args.sigma,
@@ -44,12 +41,32 @@ def main() -> None:
         episodes_per_eval=args.episodes_per_eval,
         seed=args.seed,
     )
-    history = train_es(agent, env, config)
 
+
+def save_checkpoint(stage_name: str, params: np.ndarray) -> pathlib.Path:
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(CHECKPOINT_DIR / f"{stage.name}.npy", agent.get_params())
-    print(f"Saved trained params to {CHECKPOINT_DIR / f'{stage.name}.npy'}")
-    print(f"Fitness: baseline={baseline:.1f} -> final={history[-1]:.1f}")
+    path = CHECKPOINT_DIR / f"{stage_name}.npy"
+    np.save(path, params)
+    return path
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    args = parse_args()
+    stage = STAGES[args.stage]
+    logger.info("Stage: %s  (%s)", stage.name, stage.env_kwargs)
+
+    env = Environment(seed=args.seed, **stage.env_kwargs)
+    agent = EscapeAgent()
+
+    baseline = np.mean([rollout(agent, env) for _ in range(BASELINE_EPISODES)])
+    logger.info("Untrained (real biology, gain=1.0) baseline fitness: %.1f", baseline)
+
+    history = train_es(agent, env, build_es_config(args))
+
+    checkpoint_path = save_checkpoint(stage.name, agent.get_params())
+    logger.info("Saved trained params to %s", checkpoint_path)
+    logger.info("Fitness: baseline=%.1f -> final=%.1f", baseline, history[-1])
 
 
 if __name__ == "__main__":

@@ -5,9 +5,10 @@ through it via circuit.Circuit's toy LIF model.
 
 from __future__ import annotations
 
+import logging
 import pathlib
-import sys
 import time
+from dataclasses import dataclass
 
 import matplotlib
 
@@ -15,10 +16,20 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from . import data
 from .circuit import Circuit, build_circuit
+from .data import load_connectome_data
+
+logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent.parent / "output"
+STIM_STRENGTH = 1.2
+
+
+@dataclass
+class RasterResult:
+    spikes: np.ndarray  # (steps, n) bool
+    labels: list[str]
+    neuron_ids: list[int]
 
 
 def run(
@@ -29,58 +40,77 @@ def run(
     stim_steps: int = 4,
     animate: bool = True,
 ) -> None:
-    print("Loading connectome data (weights file is ~500MB, cached after first run)...")
-    ann = data.load_annotations()
-    nt = data.load_neurotransmitters().set_index("body")["predicted_nt"]
-    w = data.load_weights()
+    logger.info("Loading connectome data (weights file is ~500MB, cached after first run)...")
+    connectome = load_connectome_data()
 
-    print(f"Building circuit around neuron type '{seed_type}' ({hops} hops)...")
-    neurons, edges = build_circuit(w, ann, seed_type, hops=hops, max_neurons=max_neurons)
-    if not neurons:
+    logger.info("Building circuit around neuron type '%s' (%d hops)...", seed_type, hops)
+    blueprint = build_circuit(connectome.weights, connectome.annotations, seed_type, hops=hops, max_neurons=max_neurons)
+    if not blueprint.neuron_ids:
         raise SystemExit("Empty circuit -- try a different --seed-type.")
+    logger.info("Circuit has %d neurons and %d connections.", len(blueprint.neuron_ids), len(blueprint.edges))
 
-    type_of = ann.set_index("bodyId")["type"].reindex(neurons).fillna("?")
-    print(f"Circuit has {len(neurons)} neurons and {len(edges)} connections.\n")
+    circuit = Circuit(blueprint, connectome.neurotransmitters)
+    type_of = connectome.annotations.set_index("bodyId")["type"].reindex(blueprint.neuron_ids).fillna("?")
+    seed_idx = [circuit.index_of[b] for b in blueprint.neuron_ids if type_of[b] == seed_type]
 
-    circuit = Circuit(neurons, edges, nt)
-    seed_idx = [circuit.index_of[b] for b in neurons if type_of[b] == seed_type]
-    stim_strength = 1.2
+    result = run_simulation(circuit, seed_idx, type_of, blueprint.neuron_ids, steps, stim_steps, animate)
+    report_most_active_neurons(result, steps)
+    save_raster_plot(result, seed_type, len(blueprint.edges))
 
+
+def run_simulation(
+    circuit: Circuit,
+    seed_idx: list[int],
+    type_of,
+    neuron_ids: list[int],
+    steps: int,
+    stim_steps: int,
+    animate: bool,
+) -> RasterResult:
     raster = np.zeros((steps, circuit.n), dtype=bool)
-    labels = [f"{type_of[b]:<12}" for b in neurons]
+    labels = [f"{type_of[b]:<12}" for b in neuron_ids]
 
     for t in range(steps):
         current = np.zeros(circuit.n)
         if t < stim_steps:
-            current[seed_idx] += stim_strength
+            current[seed_idx] += STIM_STRENGTH
         spikes = circuit.step(current)
         raster[t] = spikes
 
         if animate:
             row = "".join("*" if s else "." for s in spikes)
-            print(f"t={t:02d} [{row}]  ({spikes.sum()} spiking)")
-            sys.stdout.flush()
+            logger.info("t=%02d [%s]  (%d spiking)", t, row, spikes.sum())
             time.sleep(0.06)
 
-    print(f"\nNeurons that spiked at least once: {int(raster.any(axis=0).sum())}/{circuit.n}")
-    total_spikes = raster.sum(axis=0)
-    order = np.argsort(-total_spikes)
-    print("Most active neurons:")
-    for i in order[:10]:
+    return RasterResult(spikes=raster, labels=labels, neuron_ids=neuron_ids)
+
+
+def report_most_active_neurons(result: RasterResult, steps: int) -> None:
+    total_spikes = result.spikes.sum(axis=0)
+    ever_spiked = int(result.spikes.any(axis=0).sum())
+    logger.info("Neurons that spiked at least once: %d/%d", ever_spiked, len(result.neuron_ids))
+
+    logger.info("Most active neurons:")
+    for i in np.argsort(-total_spikes)[:10]:
         if total_spikes[i] == 0:
             break
-        print(f"  {neurons[i]:>8}  {type_of[neurons[i]]:<15} spiked {total_spikes[i]} / {steps} steps")
+        logger.info("  %8d  %-12s spiked %d / %d steps", result.neuron_ids[i], result.labels[i].strip(), total_spikes[i], steps)
 
-    fig, ax = plt.subplots(figsize=(10, max(4, circuit.n * 0.12)))
-    ys, xs = np.where(raster.T)
+
+def save_raster_plot(result: RasterResult, seed_type: str, num_edges: int) -> pathlib.Path:
+    n = len(result.neuron_ids)
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.12)))
+    ys, xs = np.where(result.spikes.T)
     ax.scatter(xs, ys, s=8, marker="|")
-    ax.set_yticks(range(circuit.n))
-    ax.set_yticklabels(labels, fontsize=6)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(result.labels, fontsize=6)
     ax.set_xlabel("timestep")
-    ax.set_title(f"Spike raster: '{seed_type}' circuit ({circuit.n} neurons, {len(edges)} synapses)")
+    ax.set_title(f"Spike raster: '{seed_type}' circuit ({n} neurons, {num_edges} synapses)")
     fig.tight_layout()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"raster_{seed_type}.png"
     fig.savefig(path, dpi=130)
     plt.close(fig)
-    print(f"\nSaved raster plot to {path}")
+    logger.info("Saved raster plot to %s", path)
+    return path
