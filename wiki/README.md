@@ -1,4 +1,4 @@
-# fly-brain wiki
+# kill-the-flies wiki
 
 This is a working wiki, not a polished writeup — it's maintained turn by
 turn as the project develops, so it stays an accurate source of truth for

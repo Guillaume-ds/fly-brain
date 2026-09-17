@@ -328,3 +328,20 @@ call without credentials fails client-side with `TypeError: Could not
 resolve authentication method...` (not `AuthenticationError` — that
 would require a bad-but-present key; here there's nothing to send at
 all). Needs testing with a real API key before relying on it.
+
+## 17. Project renamed: `fly-brain` → `kill-the-flies`
+
+**Decision:** the project's display name/branding (README title, wiki
+title) changed to `kill-the-flies` — clearer about the actual game
+premise (a player, via an LLM, tries to wipe out the colony) than
+`fly-brain`, which described the earlier connectome-exploration phase.
+The `fly_brain/` Python package name is unchanged — it's an accurate,
+descriptive name for the "fly and its brain" subsystem specifically, not
+the project's overall branding, and renaming it would touch every import
+for a cosmetic reason.
+
+**Not yet done:** the GitHub repository itself is still named
+`fly-brain` — no tool available to rename it programmatically; needs a
+manual rename via GitHub Settings. The README's clone URL is left
+pointing at the current, working repo name until that happens, to avoid
+a broken link in the meantime.

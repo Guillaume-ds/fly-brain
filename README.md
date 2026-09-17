@@ -1,9 +1,11 @@
-# fly-brain
+# kill-the-flies
 
 > This project is growing beyond the exploration tools below into training
-> the real connectome (via RL) to survive in a small game world. See
-> **[wiki/](wiki/README.md)** for the architecture, the stack, and a running
-> log of the decisions behind it.
+> the real connectome (via RL) to survive in a small adversarial game world
+> — a player (via an LLM translator) tries to wipe out a fly colony by
+> tuning spider/food spawn pressure; the colony survives via the trained
+> real connectome. See **[wiki/](wiki/README.md)** for the architecture,
+> the stack, and a running log of the decisions behind it.
 
 Small project for exploring and playing with the **MaleCNS connectome** — the
 complete wiring diagram of an adult male fruit fly's central nervous system,
