@@ -189,3 +189,33 @@ chat history.
 working with AI on a real build — a running architecture/decision record
 makes that process visible and reviewable, and doubles as the fastest way
 to resume work accurately after time away.
+
+## 12. Found: static threats give ES nothing to train against — OPEN QUESTION
+
+**Context:** `training/trainer.py` and `training/curriculum.py` were built
+and mechanically verified (correct OpenAI-ES update, checkpointing, CLI).
+Running it on stage 1 (clean escape) produced a completely flat fitness —
+`population_reward_std = 0.00` every iteration.
+
+**What's happening:** a swept range of threat densities (from the original
+`grid_size=10, num_threats=4` up to a near-maximal `grid_size=6,
+num_threats=6, threat_radius=3.0`, covering nearly the whole map) all gave
+a death rate of 0-5% under the untrained circuit. Root cause: threats are
+static, and "back away one step until the sensed signal hits zero, then
+stop" is a robust fixed point against *any* stationary threat — once the
+fly retreats out of every threat's sensing range it is safe forever, and
+with `food_enabled=False` in stage 1 there's no other reason to ever move
+again. Increasing threat count/radius doesn't change this dynamic, it just
+makes the fly retreat a bit further before permanently stopping. Since
+nearly every rollout in a population scores identically (full survival),
+ES has no fitness variance to compute an update from.
+
+**Status: unresolved, needs a decision before stage 1 can actually train.**
+Leading candidate: give threats a small per-tick random-walk movement, so
+a threat can close distance again after the fly retreats — removes the
+"freeze forever" escape hatch and makes survival depend on sustained
+reaction rather than one correct move. This would extend `Threat` (in
+`world/entities.py`) and `Environment.step()` (in `world/env.py`) beyond
+what was reviewed when those were built as static placements. Alternatives
+not yet ruled out: a standing-still cost, or pulling hunger-driven
+movement forward from stage 3. Not implemented pending that decision.

@@ -9,9 +9,9 @@
 | `world/env.py` — grid, hunger, food/threats, curriculum toggles | done, tested |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
-| `training/curriculum.py` — stage configs | **not started** |
-| `training/trainer.py` — ES training loop | **not started** |
-| Stage 1 training run (clean escape) | not started |
+| `training/curriculum.py` — stage configs | done (stage 1 only) |
+| `training/trainer.py` / `training/run.py` — ES training loop | done, mechanically tested (correctly implements the OpenAI-ES update; see `decisions.md` #12 for why a *real* training run is still blocked) |
+| Stage 1 training run (clean escape) | **blocked** — see `decisions.md` #12 |
 | Stage 2 training run (noisy escape) | not started |
 | Stage 3: freeze escape + train foraging pathway (transfer) | not started |
 | REINFORCE implementation (comparison to ES) | not started |
@@ -19,25 +19,18 @@
 
 ## Immediate next step
 
-`training/trainer.py`: an Evolution Strategies loop that
-1. perturbs `EscapeAgent.get_params()` (the `synaptic_gain` vector),
-2. rolls out an episode per perturbation via `Environment` + `agent.act()`,
-3. uses total survival ticks (or a shaped variant) as fitness,
-4. updates the parameter vector toward better-scoring perturbations.
-
-Alongside it, `training/curriculum.py` for the stage-1 config: threats
-only, no food (`food_enabled=False`), so the escape circuit trains in
-isolation before stage 2 adds distractor noise.
+Resolve the open question in `decisions.md` #12 (threats likely need to
+move) and re-tune the stage-1 config, then run stage 1 for real.
 
 ## After that
 
-- Stage 1 training run, checked against the untrained baseline already
-  captured (see `decisions.md` #7 — untrained real weights already avoid
-  threats reasonably; the open question training answers is how much
-  better real, tuned weights can do).
+- Stage 1 training run once unblocked.
 - Stage 2: same environment, harder/noisier threat signal.
 - Stage 3: freeze stage-2 weights, add and train a new foraging pathway,
   combine via the override rule from `decisions.md` #5.
 - REINFORCE implementation, compared against ES on the same stage-1 task.
-- Only after all of the above: revisit the open-world / random-generation
-  vision from the original project pitch.
+- **Open-ended world** — replace the fixed-size grid with the original
+  vision: open-ended, randomly-generated, with traps (e.g. spiderweb-style,
+  distinct from plain threats) alongside threats and fruit. Comes only
+  after the stages above, once training on the simple world is proven out
+  (see `decisions.md` #9).
