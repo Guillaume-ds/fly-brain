@@ -25,10 +25,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    # Type-only: results.py already imports this module, so importing
-    # Effect here at runtime would cycle. MobType only needs the name for
-    # typing -- from __future__ import annotations (above) means the
-    # annotation itself is never evaluated at runtime.
+    # Type-only: results.py already imports this module (so importing
+    # Effect here at runtime would cycle), and entities.py imports
+    # results.py (so importing Position here at runtime would cycle the
+    # same way). Both types are only needed for typing -- from __future__
+    # import annotations (above) means the annotations themselves are
+    # never evaluated at runtime.
+    from .entities import Position
     from .results import Effect
 
 
@@ -114,6 +117,11 @@ class ItemType:
 
     Mutable on purpose: `spawn_rate` is exactly what director/'s
     increase_/decrease_food_rate actions adjust.
+
+    `spawn_near` is `None` for the built-in food and for anything
+    created without a `target` (decisions.md #34) -- spawns anywhere on
+    the grid, today's exact behavior, unchanged. Set, it biases new
+    instances toward that position (an owner's home region) instead.
     """
 
     name: str
@@ -122,6 +130,7 @@ class ItemType:
     spawn_rate: float
     radius: float
     strength: int
+    spawn_near: "Position | None" = None
 
 
 @dataclass
@@ -136,6 +145,8 @@ class MobType:
     `effect`/`strength` are `None` only for the one built-in case: the
     spider, unconditional insta-kill on contact, unrelated to anything a
     player can create. Every player-created `MobType` has both set.
+
+    `spawn_near`: same meaning as `ItemType`'s (decisions.md #34).
     """
 
     name: str
@@ -145,6 +156,7 @@ class MobType:
     radius: float
     effect: "Effect | None" = None
     strength: int | None = None
+    spawn_near: "Position | None" = None
 
 
 def jitter(prototype: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:

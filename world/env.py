@@ -61,11 +61,9 @@ MAX_MOB_TYPES = 20
 FOOD_TYPE_NAME = "food"  # the built-in ItemType director/ is allowed to tune
 SPIDER_TYPE_NAME = "spider"  # the built-in MobType -- renamed from THREAT_TYPE_NAME (decisions.md #31): it's specifically the spider now that a Mob isn't always a threat
 
-# Resource-cost system (decisions.md #33): a single global energy pool for
-# now -- there's only one instruction source today -- structured as the
-# scalar a future dict[player_id, float] trivially generalizes from once a
-# second one exists. Gates creation only; the rate nudges above are already
-# self-limiting (bounded, reversible) and stay free.
+# Resource-cost system (decisions.md #33): one energy pool per owner --
+# gates creation only; the rate nudges above are already self-limiting
+# (bounded, reversible) and stay free.
 STARTING_ENERGY = 20.0
 MAX_ENERGY = 50.0  # cap on banked energy -- spend it, don't hoard it
 ENERGY_REGEN_PER_TICK = 0.1  # fixed regen, deliberately not tied to colony state -- see decisions.md #33 for why
@@ -78,6 +76,28 @@ def creation_cost(kind: str, strength: int) -> float:
     that's a deliberate rejection, not an omission.
     """
     return KIND_BASE_COST[kind] * clamp_strength(strength)
+
+
+# Multi-colony ownership (decisions.md #34, #35).
+DEFAULT_OWNER = "player"  # the one implicit owner every single-player call site uses; must match entities.Fly's own default
+FLY_PERCEPTION_RADIUS = 3.0  # how far a fly can perceive another fly, own or rival -- placeholder, not tuned
+FLY_COMBAT_DAMAGE = 5  # fixed, symmetric, authored HEALTH delta per tick of contact between different-owner flies -- placeholder, not tuned
+KILL_TRANSFER_FRACTION = 0.5  # fraction of a dying fly's own hunger transferred to the rival(s) that killed it -- placeholder, not tuned
+TARGET_SPAWN_RADIUS = 5  # how tightly "near an owner's home region" is defined when creation targets a territory -- placeholder, not tuned
+_CORNER_OFFSETS = [(0, 0), (1, 0), (0, 1), (1, 1)]  # home-region geometry: grid corners in registration order -- explicitly a placeholder, not a considered design (decisions.md #34)
+
+
+def _orthogonal_vector(index: int, dim: int) -> np.ndarray:
+    """A fixed, exactly orthogonal per-owner perception vector
+    (decisions.md #35) -- a standard basis vector, not jittered, unlike
+    every other prototype in this system. Guarantees EXACT zero cosine
+    similarity between any two owners, not merely a probabilistically
+    small one. Exhausts at `dim` distinct owners (64 by default),
+    nowhere near a practical concern at this game's scale.
+    """
+    vector = np.zeros(dim, dtype=np.float64)
+    vector[index % dim] = 1.0
+    return vector
 
 
 class Action(enum.IntEnum):
@@ -116,7 +136,7 @@ class ColonyStepResult:
     observations: dict[int, Observation]  # fly id -> observation, alive flies only
     deaths: dict[int, str]  # fly id -> cause ("threat" | "starved" | "damage")
     births: dict[int, int]  # new fly id -> parent fly id
-    colony_extinct: bool
+    colony_extinct: dict[str, bool]  # owner -> whether THEIR flies are all gone (decisions.md #34) -- the game ends for a player when theirs is True, not globally
     timed_out: bool
 
 
@@ -228,11 +248,19 @@ class Environment:
         self.mob_types: list[MobType] = []  # player-created, see add_mob_type()
         self.rng = np.random.default_rng(seed)
 
+        # Owner registry (decisions.md #34, #35): persists across reset(),
+        # same as item_types/tile_types/mob_types above -- registration is
+        # a session concept, not a per-episode one. Populated lazily by
+        # register_owner(), in registration order.
+        self.owners: list[str] = []
+        self.owner_vectors: dict[str, np.ndarray] = {}
+        self.owner_home: dict[str, Position] = {}
+        self.energy: dict[str, float] = {}
+
         self.flies: list[Fly]
         self.mobs: list[Mob]
         self.items: list[Item]
         self.tiles: list[Tile]
-        self.energy: float
         self.tick: int
         self.next_fly_id: int
         self.reset()
@@ -258,27 +286,37 @@ class Environment:
         mirrors spawnable_item_types."""
         return [self.spider_type, *self.mob_types]
 
-    def add_item_type(self, name: str, description: str, strength: int) -> bool:
+    def add_item_type(
+        self, name: str, description: str, strength: int, owner: str = DEFAULT_OWNER, target: str | None = None,
+    ) -> bool:
         """The player-facing item-creation entry point (decisions.md
-        #27, #30, #32) -- director/'s create_item action wraps this
+        #27, #30, #32, #34) -- director/'s create_item action wraps this
         directly. How flies perceive and react to the resulting item is
         determined entirely by `name`+`description`'s attribute vector,
         via the same Percept/Result-registry mechanism as food;
         `strength` scales the resulting effect's overall magnitude only,
         never which channel moves or in which direction. Silently
-        capped at MAX_ITEM_TYPES, and silently rejected if it can't be
-        afforded (decisions.md #33) -- energy is only ever spent on a
+        capped at MAX_ITEM_TYPES, and silently rejected if `owner` can't
+        afford it (decisions.md #33) -- energy is only ever spent on a
         request that also clears the cap. Returns whether it was
         actually created, so a cap rejection, an energy rejection, and
         success can be told apart by the caller.
+
+        `owner` is who's paying, always supplied by the caller, never by
+        a translator (decisions.md #34) -- it's session identity, not
+        request content. `target` IS translator-supplied: `None` spawns
+        anywhere on the grid (today's exact behavior, unchanged unless a
+        caller opts in); `"own"` biases spawning toward `owner`'s own
+        home region; anything else is read as a specific rival's name.
         """
         if len(self.item_types) >= MAX_ITEM_TYPES:
             return False
+        self.register_owner(owner)
         strength = clamp_strength(strength)
         cost = creation_cost("item", strength)
-        if cost > self.energy:
+        if cost > self.energy[owner]:
             return False
-        self.energy -= cost
+        self.energy[owner] -= cost
         self.item_types.append(
             ItemType(
                 name=name,
@@ -287,29 +325,34 @@ class Environment:
                 spawn_rate=self.item_spawn_rate,
                 radius=self.item_radius,
                 strength=strength,
+                spawn_near=self._resolve_target(owner, target),
             )
         )
         return True
 
-    def add_tile_type(self, name: str, description: str, strength: int) -> bool:
+    def add_tile_type(
+        self, name: str, description: str, strength: int, owner: str = DEFAULT_OWNER, target: str | None = None,
+    ) -> bool:
         """The player-facing tile-creation entry point (decisions.md
-        #31, #32) -- director/'s create_tile action wraps this directly.
-        Identical mechanism to add_item_type -- same encoder-driven
-        attributes, same Result-registry effect, same `strength` scaling
-        -- the only difference is downstream, in how a spawned Tile is
-        resolved (never consumed, a fraction applied every tick, see
+        #31, #32, #34) -- director/'s create_tile action wraps this
+        directly. Identical mechanism to add_item_type -- same
+        encoder-driven attributes, same Result-registry effect, same
+        `strength` scaling, same `owner`/`target` meaning -- the only
+        difference is downstream, in how a spawned Tile is resolved
+        (never consumed, a fraction applied every tick, see
         resolve_tile_effects()). Silently capped at MAX_TILE_TYPES, and
-        gated on energy the same way add_item_type is (decisions.md
-        #33) -- tiles cost more per point of strength than items do,
-        since a tile keeps paying out every tick it's stood in.
+        gated on `owner`'s energy the same way add_item_type is
+        (decisions.md #33) -- tiles cost more per point of strength than
+        items do, since a tile keeps paying out every tick it's stood in.
         """
         if len(self.tile_types) >= MAX_TILE_TYPES:
             return False
+        self.register_owner(owner)
         strength = clamp_strength(strength)
         cost = creation_cost("tile", strength)
-        if cost > self.energy:
+        if cost > self.energy[owner]:
             return False
-        self.energy -= cost
+        self.energy[owner] -= cost
         self.tile_types.append(
             ItemType(
                 name=name,
@@ -318,13 +361,16 @@ class Environment:
                 spawn_rate=self.tile_spawn_rate,
                 radius=self.tile_radius,
                 strength=strength,
+                spawn_near=self._resolve_target(owner, target),
             )
         )
         return True
 
-    def add_mob_type(self, name: str, effect: str, strength: int) -> bool:
+    def add_mob_type(
+        self, name: str, effect: str, strength: int, owner: str = DEFAULT_OWNER, target: str | None = None,
+    ) -> bool:
         """The player-facing mob-creation entry point (decisions.md #30-
-        #32) -- director/'s create_mob action wraps this directly.
+        #32, #34) -- director/'s create_mob action wraps this directly.
         Unlike add_item_type/add_tile_type, `effect` is authored and read
         directly -- never derived from the embedding, which drives
         perception only (decisions.md #30: the encoder can't be trusted
@@ -333,8 +379,9 @@ class Environment:
         to land and is silently dropped, same principle as everywhere
         else in this pipeline -- checked before energy is ever touched,
         since an invalid request was never a real one to charge for.
-        Silently capped at MAX_MOB_TYPES, and gated on energy the same
-        way as item/tile (decisions.md #33).
+        Silently capped at MAX_MOB_TYPES, and gated on `owner`'s energy
+        the same way as item/tile (decisions.md #33). `owner`/`target`
+        mean exactly what they do on add_item_type.
         """
         if len(self.mob_types) >= MAX_MOB_TYPES:
             return False
@@ -342,11 +389,12 @@ class Environment:
             effect_enum = Effect(effect)
         except ValueError:
             return False
+        self.register_owner(owner)
         strength = clamp_strength(strength)
         cost = creation_cost("mob", strength)
-        if cost > self.energy:
+        if cost > self.energy[owner]:
             return False
-        self.energy -= cost
+        self.energy[owner] -= cost
         description = compose_mob_description(name, effect_enum, strength)
         self.mob_types.append(
             MobType(
@@ -357,9 +405,68 @@ class Environment:
                 radius=self.mob_radius,
                 effect=effect_enum,
                 strength=strength,
+                spawn_near=self._resolve_target(owner, target),
             )
         )
         return True
+
+    def _resolve_target(self, owner: str, target: str | None) -> Position | None:
+        """`None` means spawn anywhere on the grid -- today's exact
+        behavior, so nothing that doesn't pass `target` is affected at
+        all (decisions.md #34). `"own"` resolves to `owner`'s own home
+        region; anything else is read as a specific rival's name and
+        registered if new (a target doesn't need to already have flies
+        to have a home region reserved for it).
+        """
+        if target is None:
+            return None
+        target_owner = owner if target == "own" else target
+        self.register_owner(target_owner)
+        return self.owner_home[target_owner]
+
+    def register_owner(self, owner: str) -> None:
+        """Assigns a new owner an index (used for their fixed, exactly
+        orthogonal perception vector, decisions.md #35), a home region
+        (decisions.md #34), and a starting energy pool (decisions.md
+        #33), all in registration order. Idempotent -- a second call for
+        an already-known owner does nothing, so callers never need to
+        check first.
+        """
+        if owner in self.owner_vectors:
+            return
+        index = len(self.owners)
+        self.owners.append(owner)
+        self.owner_vectors[owner] = _orthogonal_vector(index, self.encoder.output_dim)
+        self.owner_home[owner] = self._owner_home_position(index)
+        self.energy[owner] = self.starting_energy
+
+    def _owner_home_position(self, index: int) -> Position:
+        """Fixed regions per owner, corners of the grid in registration
+        order -- explicitly a placeholder geometry, not a considered
+        design (decisions.md #34 left this open). Nudges inward for a
+        5th+ owner so they don't stack exactly on an earlier one's corner.
+        """
+        fx, fy = _CORNER_OFFSETS[index % 4]
+        inset = 2 * (index // 4)
+        x = inset if fx == 0 else self.grid_size - 1 - inset
+        y = inset if fy == 0 else self.grid_size - 1 - inset
+        return self.clamp_to_grid(x, y)
+
+    def spawn_colony(self, owner: str, population: int) -> list[Fly]:
+        """Adds a new colony for `owner` to an already-running world,
+        spawned near their home region -- the entry point for a second
+        (or Nth) player joining (decisions.md #34). The initial
+        population from __init__/reset() always belongs to
+        DEFAULT_OWNER; this is for everyone after that.
+        """
+        self.register_owner(owner)
+        home = self.owner_home[owner]
+        spawned = []
+        for _ in range(population):
+            fly = self.spawn_fly(self.random_nearby_empty_cell(home, self.offspring_spawn_radius), owner=owner)
+            self.flies.append(fly)
+            spawned.append(fly)
+        return spawned
 
     # director-facing controls -- see wiki/decisions.md #14 for why these
     # are fixed, bounded nudges rather than taking a magnitude argument.
@@ -381,14 +488,17 @@ class Environment:
         self.mobs = []
         self.items = []
         self.tiles = []
-        self.energy = self.starting_energy
         self.flies = []
+        self.register_owner(DEFAULT_OWNER)
+        for owner in self.owners:
+            self.energy[owner] = self.starting_energy
         for _ in range(self.initial_population):
             self.flies.append(self.spawn_fly(self.random_empty_cell(self.occupied_cells())))
         return {fly.id: self.observe(fly) for fly in self.flies}
 
-    def spawn_fly(self, position: Position) -> Fly:
-        fly = Fly(id=self.next_fly_id, position=position, hunger=self.max_hunger, health=self.max_health)
+    def spawn_fly(self, position: Position, owner: str = DEFAULT_OWNER) -> Fly:
+        self.register_owner(owner)
+        fly = Fly(id=self.next_fly_id, position=position, hunger=self.max_hunger, health=self.max_health, owner=owner)
         self.next_fly_id += 1
         return fly
 
@@ -401,12 +511,15 @@ class Environment:
         self.tick += 1
         for fly in self.flies:
             fly.hunger -= 1
-        self.energy = min(self.max_energy, self.energy + self.energy_regen_per_tick)
+        for owner in self.owners:
+            self.energy[owner] = min(self.max_energy, self.energy[owner] + self.energy_regen_per_tick)
         self.move_mobs()
         self.spawn_entities()
         self.resolve_item_pickup()
         self.resolve_tile_effects()
         self.resolve_mob_contact()
+        self.resolve_fly_combat()
+        self.resolve_kill_transfers()
         births = self.resolve_reproduction()
         deaths = self.resolve_deaths()
 
@@ -414,7 +527,7 @@ class Environment:
             observations={fly.id: self.observe(fly) for fly in self.flies},
             deaths=deaths,
             births=births,
-            colony_extinct=not self.flies,
+            colony_extinct={owner: not any(f.owner == owner for f in self.flies) for owner in self.owners},
             timed_out=self.tick >= self.max_ticks,
         )
 
@@ -484,14 +597,26 @@ class Environment:
             if self.rng.random() < tile_type.spawn_rate:
                 self.tiles.append(self.spawn_of(Tile, tile_type))
 
+    def _spawn_position(self, spawn_near: Position | None) -> Position:
+        """`spawn_near` is `None` for anything created without a
+        `target` -- anywhere on the grid, today's exact behavior
+        (decisions.md #34). Set, it biases toward that position instead
+        (an owner's home region).
+        """
+        if spawn_near is None:
+            return self.random_empty_cell(self.occupied_cells())
+        return self.random_nearby_empty_cell(spawn_near, TARGET_SPAWN_RADIUS)
+
     def spawn_of(self, entity_class: type, item_type: ItemType):
-        """One spawn path for Item and Tile -- an empty cell, the type's
-        radius, a per-instance jitter of its prototype vector, and the
-        type's strength (decisions.md #32). They're built identically;
-        what differs is only what the world does with them afterwards.
+        """One spawn path for Item and Tile -- a cell (near `spawn_near`
+        if the type has one, decisions.md #34; anywhere otherwise), the
+        type's radius, a per-instance jitter of its prototype vector,
+        and the type's strength (decisions.md #32). They're built
+        identically; what differs is only what the world does with them
+        afterwards.
         """
         return entity_class(
-            self.random_empty_cell(self.occupied_cells()),
+            self._spawn_position(item_type.spawn_near),
             item_type.radius,
             jitter(item_type.attributes, self.item_jitter_sigma, self.rng),
             item_type.strength,
@@ -504,7 +629,7 @@ class Environment:
         (decisions.md #31).
         """
         return Mob(
-            self.random_empty_cell(self.occupied_cells()),
+            self._spawn_position(mob_type.spawn_near),
             mob_type.radius,
             jitter(mob_type.attributes, self.item_jitter_sigma, self.rng),
             mob_type.effect,
@@ -542,6 +667,50 @@ class Environment:
                 if fly.position.x == mob.position.x and fly.position.y == mob.position.y:
                     channel, delta = mob_effect_delta(mob.effect, mob.strength, self.channel_limits)
                     _write_channel_delta(fly, channel, delta, self.channel_limits[channel])
+
+    def resolve_fly_combat(self) -> None:
+        """Contact between different-owner flies: a small, fixed,
+        authored HEALTH delta, symmetric, never derived from the
+        (identical-shape) Percept vector -- same reasoning as a created
+        mob's effect (decisions.md #30), except a fly has no description
+        to derive anything from in the first place. Same-owner contact
+        does nothing; any two different owners are rivals, no alliances
+        (decisions.md #34).
+        """
+        for i, fly in enumerate(self.flies):
+            for other in self.flies[i + 1:]:
+                if fly.owner == other.owner:
+                    continue
+                if fly.position.x == other.position.x and fly.position.y == other.position.y:
+                    _write_channel_delta(fly, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
+                    _write_channel_delta(other, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
+
+    def resolve_kill_transfers(self) -> None:
+        """When a fly is about to die (health <= 0, whatever the cause)
+        with rival-owned flies sharing its cell, a fraction of its own
+        hunger transfers to them, split evenly -- a real hunger delta,
+        the same tick as the death, flowing through the existing reward
+        mechanism untouched (decisions.md #35): `reward = max(0,
+        delta_hunger)` in fly_brain/plasticity.py needs no change at all.
+        Must run after resolve_fly_combat() (so combat's damage is
+        already reflected) and before resolve_deaths() (so the dying
+        fly's hunger/position are still here to read).
+        """
+        for fly in self.flies:
+            if fly.health > 0:
+                continue
+            rivals_here = [
+                other
+                for other in self.flies
+                if other.owner != fly.owner
+                and other.position.x == fly.position.x
+                and other.position.y == fly.position.y
+            ]
+            if not rivals_here:
+                continue
+            transfer = fly.hunger * KILL_TRANSFER_FRACTION / len(rivals_here)
+            for rival in rivals_here:
+                _write_channel_delta(rival, Channel.HUNGER, transfer, self.channel_limits[Channel.HUNGER])
 
     def apply_result(self, fly: Fly, attributes: np.ndarray, strength: int, tick_fraction: float = 1.0) -> None:
         """The real mechanical effect of an item/tile on a fly -- a
@@ -587,7 +756,9 @@ class Environment:
             fly.hunger = int(fly.hunger * (1 - self.reproduction_hunger_cost_fraction))
             fly.vulnerable_ticks_left = self.reproduction_vulnerability_ticks
 
-            offspring = self.spawn_fly(self.random_nearby_empty_cell(fly.position, self.offspring_spawn_radius))
+            offspring = self.spawn_fly(
+                self.random_nearby_empty_cell(fly.position, self.offspring_spawn_radius), owner=fly.owner,
+            )
             self.flies.append(offspring)
             births[offspring.id] = fly.id
 
@@ -640,12 +811,26 @@ class Environment:
         """Items, tiles, and mobs are perceived identically -- each
         carries its own radius and attribute vector, and nothing that
         distinguishes them survives into the Percept (decisions.md #22
-        part 1, #28, #31).
+        part 1, #28, #31). Other flies are perceived the same way
+        (decisions.md #34, #35): every owner's flies share one fixed,
+        exactly orthogonal vector, so a colony can learn per-rival
+        valence -- but the Percept a fly receives is still exactly
+        attributes/dx/dy/distance, no owner field, ever.
         """
         nearby = [
             percept
             for entity in (*self.items, *self.tiles, *self.mobs)
             if (percept := self.perceive(fly.position, entity.position, entity.attributes, entity.radius))
+        ]
+        nearby += [
+            percept
+            for other in self.flies
+            if other.id != fly.id
+            and (
+                percept := self.perceive(
+                    fly.position, other.position, self.owner_vectors[other.owner], FLY_PERCEPTION_RADIUS,
+                )
+            )
         ]
         return Observation(nearby=nearby, hunger=fly.hunger / self.max_hunger)
 

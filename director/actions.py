@@ -9,7 +9,9 @@ independent bounded rates, nothing else exposed. `create_item`
 argument_schema mechanism with more than one field each, and give
 `create_mob` a real enum instead of free text -- the schema itself is
 what makes an unsupported request ("spits fire") have nowhere to land,
-rather than the engine growing to accommodate it.
+rather than the engine growing to accommodate it. `target`
+(decisions.md #34) is the first OPTIONAL field any schema here has --
+`required_arguments` exists specifically to let it stay that way.
 """
 
 from __future__ import annotations
@@ -29,6 +31,16 @@ _STRENGTH_FIELD = {
     "maximum": 5,
     "description": "Overall potency, 1 (mild) to 5 (intense). Scales magnitude only.",
 }
+# Shared by all three create_* actions (decisions.md #34) -- optional on
+# purpose: a request that never mentions a rival shouldn't be forced to
+# invent a value, and env.add_*_type()'s own `target: str | None = None`
+# default means omitting it is exactly today's single-player behavior.
+_TARGET_FIELD = {
+    "type": "string",
+    "description": "Whose territory this should appear near: 'own' for the "
+    "issuing player's own colony, or another player's name to target "
+    "theirs. Omit if the request doesn't mention any particular location.",
+}
 
 
 @dataclass(frozen=True)
@@ -38,6 +50,7 @@ class ActionSpec:
     fn: Callable[..., None]  # zero-arg, or called with **kwargs matching argument_schema's keys.
     # The three create_* actions return bool (created or not, decisions.md #33); the rate nudges return None.
     argument_schema: dict[str, dict] | None = None  # {param_name: JSON-schema-property}; None means zero-argument
+    required_arguments: tuple[str, ...] | None = None  # None means every argument_schema key is required (unchanged default); set explicitly to exempt an optional field like `target`
 
 
 def build_registry(env: Environment) -> list[ActionSpec]:
@@ -78,7 +91,9 @@ def build_registry(env: Environment) -> list[ActionSpec]:
                     "description implies.",
                 },
                 "strength": _STRENGTH_FIELD,
+                "target": _TARGET_FIELD,
             },
+            required_arguments=("name", "description", "strength"),
         ),
         ActionSpec(
             "create_tile",
@@ -94,7 +109,9 @@ def build_registry(env: Environment) -> list[ActionSpec]:
                     "it and what it does to them, exactly like create_item.",
                 },
                 "strength": _STRENGTH_FIELD,
+                "target": _TARGET_FIELD,
             },
+            required_arguments=("name", "description", "strength"),
         ),
         ActionSpec(
             "create_mob",
@@ -121,6 +138,8 @@ def build_registry(env: Environment) -> list[ActionSpec]:
                     "maximum": 5,
                     "description": "Magnitude of the effect, 1 (weak) to 5 (lethal, for damage/starve).",
                 },
+                "target": _TARGET_FIELD,
             },
+            required_arguments=("name", "effect", "strength"),
         ),
     ]

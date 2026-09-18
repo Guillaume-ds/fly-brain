@@ -96,5 +96,6 @@ class Fly:
     position: Position
     hunger: int
     health: int
+    owner: str = "player"  # decisions.md #34 -- which colony this fly belongs to, inherited by offspring; must match env.DEFAULT_OWNER (can't import it here without a cycle)
     vulnerable_ticks_left: int = 0  # >0 while recovering from reproduction; forces STAY
     stuck_ticks: int = 0  # >0 while immobilized (e.g. a web-like item); forces STAY, see decisions.md #22 part 5

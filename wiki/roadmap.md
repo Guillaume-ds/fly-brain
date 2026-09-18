@@ -21,6 +21,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Player-driven *tile* creation — `Tile`, `create_tile` director action | **done, tested** (`decisions.md` #31, #32) — reuses the item mechanism, never consumed, a fraction re-applied every tick |
 | Player-driven *mob* creation — `Threat` renamed `Mob`, `create_mob` director action | **done, tested** (`decisions.md` #30–#32) — authored `effect`/`strength`, never derived from the embedding; the built-in spider is unaffected (still unconditional insta-kill) |
 | Resource-cost system — `Environment.energy`, gates all three creation actions | **done, tested** (`decisions.md` #33) — cost = `(kind, strength)` only, fixed per-tick regen, existing type caps kept as a backstop; constants are placeholders pending real playtesting |
+| Multi-colony ownership — `Fly.owner`, per-owner extinction, fly-vs-fly perception/combat/kill-transfer, `target` on creation | **done, tested** (`decisions.md` #34, #35) — every fly perceives every other fly through a fixed, exactly orthogonal per-owner vector; the `Percept` itself and the anonymity contract are unchanged; combat/kill-transfer reuse existing mechanisms (authored `HEALTH` delta, the existing `reward = max(0, ΔHUNGER)` term) with zero `fly_brain/` changes |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -133,13 +134,11 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     mandatory embedding clause firing only for `damage`/`starve`.
 
 14. ~~Resource-cost system~~ done, see `decisions.md` #33.
-    `Environment.energy`, a single global pool for now (structured to
-    key by player once a second instruction source exists,
-    `decisions.md` #34's sequencing note) — `STARTING_ENERGY = 20`,
-    `MAX_ENERGY = 50`, regenerating `ENERGY_REGEN_PER_TICK = 0.1` per
-    tick, unconditionally, never tied to colony state. `creation_cost(kind,
-    strength) = KIND_BASE_COST[kind] * strength` (`item: 2`, `tile: 4`,
-    `mob: 3` — tiles cost more since they keep paying out every tick).
+    `Environment.energy` — `STARTING_ENERGY = 20`, `MAX_ENERGY = 50`,
+    regenerating `ENERGY_REGEN_PER_TICK = 0.1` per tick, unconditionally,
+    never tied to colony state. `creation_cost(kind, strength) =
+    KIND_BASE_COST[kind] * strength` (`item: 2`, `tile: 4`, `mob: 3` —
+    tiles cost more since they keep paying out every tick).
     `add_item_type`/`add_tile_type`/`add_mob_type` now return `bool`
     instead of `None`, and the guard order is cap, then (mob only)
     effect validity, then affordability, deduct only on success — a
@@ -147,14 +146,54 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     `game/live_run.py`'s `apply_requests()` reports a create action that
     was understood but couldn't be afforded/fit as
     `f"{name} (rejected)"`, distinct from `None` (nothing in the
-    registry matched at all). A new `tests/test_creation_cost.py`
-    covers the formula, spending, all three kinds' own gating, that a
-    cap or invalid-effect rejection never spends energy, and
-    regeneration/capping/reset — 27 tests, 53 total passing. Verified
-    live end to end through `apply_requests()` with a fake controller
-    exhausting a real budget, and a full headless colony run.
+    registry matched at all). At the time this landed there was still
+    only one instruction source, so `energy` was a single scalar;
+    step 15 below turned it into `dict[str, float]`, one pool per
+    owner, exactly as this step's sequencing note anticipated.
     Constants above are placeholders, explicitly not tuned by playing
     yet (`decisions.md` #33 left them open on purpose).
+
+15. ~~Multi-colony ownership~~ done, see `decisions.md` #34, #35.
+    `Fly.owner` (inherited at birth); `Environment.register_owner()`
+    lazily assigns a new owner an index, a fixed exactly-orthogonal
+    perception vector (`np.eye(dim)[index]`, not jittered), a home
+    region (grid corners in registration order — a placeholder
+    geometry, not a considered design), and an energy pool.
+    `ColonyStepResult.colony_extinct` is now `dict[str, bool]`, one flag
+    per owner — `game/colony.py`, `game/live_run.py`, and
+    `training/trainer.py` all updated to check `all(...values())`
+    instead of a bare bool. `Environment.observe()` now also perceives
+    every other fly (own or rival) through its owner's fixed vector —
+    the `Percept` itself is still exactly `attributes, dx, dy, distance`,
+    unchanged, so the anonymity contract (`decisions.md` #22) is
+    untouched. `resolve_fly_combat()` deals a small fixed, symmetric,
+    authored `HEALTH` delta between different-owner flies on contact
+    (same-owner contact does nothing); `resolve_kill_transfers()`
+    moves a fraction of a dying fly's own hunger to the rival(s) on its
+    cell, same tick, flowing through the existing `reward = max(0,
+    ΔHUNGER)` term untouched — no `fly_brain/` changes at all.
+    `create_item`/`create_tile`/`create_mob` gained an optional
+    `target` field (`"own"` or a named rival; omitted, spawning is
+    unchanged from before this entry) via a new `required_arguments`
+    mechanism on `ActionSpec` — the first optional field any director
+    schema has had. `owner` itself is supplied by the caller
+    (`game/live_run.py`'s `apply_requests()`), never by the translating
+    controller, since it's session identity, not request content.
+    `Environment.spawn_colony()`/`Colony.add_colony()` are the entry
+    points for adding a second (or Nth) colony to an already-running
+    world. Two new test files (`tests/test_multi_colony.py`, 20 tests;
+    `tests/test_creation_cost.py` extended for per-owner energy) —
+    76 total passing. Verified live: symmetric combat damage over
+    several ticks, `target="own"` correctly biasing where an item
+    spawns, and `add_colony()` wiring a second colony's brain agents
+    automatically, all together in one running session; a full
+    single-player headless colony run confirmed byte-for-byte
+    unaffected. Still open, deliberately: home-region geometry, whether
+    `max_population` stays shared or goes per-player, the combat damage
+    constant, and the kill-transfer fraction (real risk to tune around:
+    could make combat more lucrative than foraging, on top of #28's
+    already-known foraging weakness) — all placeholders, not tuned by
+    playing yet.
 
 Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
@@ -197,29 +236,6 @@ yet started (see "After that" below).
   instructions→world→learning loop multiplexed across two sources.
   Noted for the future; multiplayer explicitly out of scope for now
   (`decisions.md` #29).
-- **Multi-colony ownership** — N players, each with their own colony in
-  one shared world, helping their own and degrading everyone else's; a
-  real step up from "god vs devil"'s one shared colony. **Designed**
-  (`decisions.md` #34, perception revised by #35 — `Fly.owner`,
-  per-owner extinction, a `target` field on creation, player identity
-  threaded through `director/`, and fly-vs-fly combat: every fly
-  perceives every other fly, but through a **fixed, exactly orthogonal
-  vector per owner** (a standard basis vector, not jittered) rather
-  than one shared generic one — the pillar anonymity contract stays
-  exactly as strict as it is today (still just `attributes, dx, dy,
-  distance`, no owner field), while a colony can now actually learn
-  "this rival is weak, that one is strong" per opponent. Contact
-  between different-owner flies deals symmetric authored `HEALTH`
-  damage; a fly that dies in combat transfers a fraction of its own
-  hunger to the rival(s) that killed it, same tick — grounding "killing
-  is good" in a real, existing reward channel (`reward = max(0,
-  ΔHUNGER)`) instead of an injected bonus, and self-limiting against
-  gratuitous kills since a starving rival has nothing to transfer),
-  not implemented. Still open: home-region geometry, whether
-  `max_population` stays shared or goes per-player, the combat damage
-  constant, and the kill-transfer fraction (real risk to tune around:
-  could make combat more lucrative than foraging, on top of #28's
-  already-known foraging weakness).
 - **Preview/confirm creation UX** — before committing, show the player
   what a request actually produced (the Result-registry blend weights,
   `strength`, an eventual resource cost) and let them either refine the

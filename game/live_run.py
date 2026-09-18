@@ -23,7 +23,7 @@ from director.claude_controller import ClaudeController
 from director.rule_based_controller import RuleBasedController
 from fly_brain.agent import build_escape_template
 from fly_brain.plasticity import build_plasticity_template
-from world.env import Environment
+from world.env import DEFAULT_OWNER, Environment
 from world.items import HashingItemEncoder
 
 from .colony import Colony, load_starting_gains
@@ -36,11 +36,15 @@ QUIT_WORDS = {"quit", "exit"}
 UNBOUNDED_TICKS = 10**9  # a live session ends by extinction or user quit, not a tick cap
 
 
-def read_requests(input_queue: "queue.Queue[str | None]") -> None:
+def read_requests(input_queue: "queue.Queue[tuple[str, str] | None]") -> None:
     """Runs in a background thread: blocks on stdin, pushes each non-empty
-    line into the queue. Puts a `None` sentinel on EOF or a quit word,
-    then returns. The only thing this thread touches is the queue --
-    colony/environment state is mutated exclusively by the main thread.
+    line into the queue as (text, owner). There's only one local input
+    stream today, so every line is tagged DEFAULT_OWNER (decisions.md
+    #34) -- the plumbing supports a different owner per request, a
+    second real input source just doesn't exist yet. Puts a `None`
+    sentinel on EOF or a quit word, then returns. The only thing this
+    thread touches is the queue -- colony/environment state is mutated
+    exclusively by the main thread.
     """
     try:
         while True:
@@ -50,16 +54,16 @@ def read_requests(input_queue: "queue.Queue[str | None]") -> None:
             if line.lower() in QUIT_WORDS:
                 input_queue.put(None)
                 return
-            input_queue.put(line)
+            input_queue.put((line, DEFAULT_OWNER))
     except EOFError:
         input_queue.put(None)
 
 
-def drain(input_queue: "queue.Queue[str | None]") -> tuple[list[str], bool]:
+def drain(input_queue: "queue.Queue[tuple[str, str] | None]") -> tuple[list[tuple[str, str]], bool]:
     """Non-blocking: pulls everything currently queued. Returns (pending
-    requests in order, quit_requested).
+    (request, owner) pairs in order, quit_requested).
     """
-    pending: list[str] = []
+    pending: list[tuple[str, str]] = []
     quit_requested = False
     while True:
         try:
@@ -74,37 +78,42 @@ def drain(input_queue: "queue.Queue[str | None]") -> tuple[list[str], bool]:
 
 
 def apply_requests(
-    requests: list[str], controller: WorldController, actions: list[ActionSpec]
+    requests: list[tuple[str, str]], controller: WorldController, actions: list[ActionSpec]
 ) -> list[tuple[str, str | None]]:
-    """Pure logic, no I/O -- testable without a real stdin/thread. Returns
-    (request, status) per request: the action name on success,
+    """Pure logic, no I/O -- testable without a real stdin/thread. Each
+    request is (text, owner) -- owner is who's paying and who "own"
+    resolves to in a `target` field, supplied by the caller, never by
+    the translating controller (decisions.md #34). Returns (request
+    text, status) per request: the action name on success,
     f"{name} (rejected)" if a create_* action understood the request
     but a type cap or insufficient energy stopped it (decisions.md #33),
     or None if nothing in the registry matched at all. `arguments`
     (decisions.md #27, #30-#32) is passed through to the action's fn as
-    **kwargs only when that action declares an argument_schema.
+    **kwargs only when that action declares an argument_schema; `owner`
+    is passed alongside them for those same actions, never for the
+    zero-argument rate nudges, which stay owner-agnostic.
     """
     by_name = {action.name: action for action in actions}
     results: list[tuple[str, str | None]] = []
-    for request in requests:
-        outcome = controller.choose_action(request, actions)
+    for request_text, owner in requests:
+        outcome = controller.choose_action(request_text, actions)
         action_name = outcome[0] if outcome is not None else None
         action = by_name.get(action_name) if action_name is not None else None
         if action is None:
             action_name = None
         elif action.argument_schema is not None:
-            if action.fn(**outcome[1]) is False:
+            if action.fn(**outcome[1], owner=owner) is False:
                 action_name = f"{action_name} (rejected)"
         else:
             action.fn()
-        results.append((request, action_name))
+        results.append((request_text, action_name))
     return results
 
 
 def run_live(
     colony: Colony,
     controller: WorldController,
-    input_queue: "queue.Queue[str | None]",
+    input_queue: "queue.Queue[tuple[str, str] | None]",
     ticks_per_second: float,
     audit_every: int = 50,
 ) -> None:
@@ -132,7 +141,7 @@ def run_live(
                 "tick %4d  plasticity audit: mean gain drift=%.3f, reinforcement events=%d",
                 colony.env.tick, summary["mean_gain_drift"], summary["total_reinforcement_events"],
             )
-        if result.colony_extinct:
+        if all(result.colony_extinct.values()):
             logger.info("Colony extinct at tick %d", colony.env.tick)
             return
         if quit_requested:
@@ -181,7 +190,7 @@ def main() -> None:
     )
     controller = build_controller(args.controller)
 
-    input_queue: "queue.Queue[str | None]" = queue.Queue()
+    input_queue: "queue.Queue[tuple[str, str] | None]" = queue.Queue()
     reader = threading.Thread(target=read_requests, args=(input_queue,), daemon=True)
     reader.start()
 

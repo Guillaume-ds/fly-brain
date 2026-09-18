@@ -37,7 +37,11 @@ def build_tool_definitions(actions: list[ActionSpec]) -> list[dict]:
             "input_schema": {
                 "type": "object",
                 "properties": action.argument_schema or {},
-                "required": list((action.argument_schema or {}).keys()),
+                "required": (
+                    list(action.required_arguments)
+                    if action.required_arguments is not None
+                    else list((action.argument_schema or {}).keys())
+                ),
             },
         }
         for action in actions

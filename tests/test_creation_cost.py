@@ -1,4 +1,4 @@
-"""The resource-cost system (wiki/decisions.md #33).
+"""The resource-cost system (wiki/decisions.md #33, #34).
 
 Not part of the item contract (tests/test_item_contract.py) -- this is
 economy bookkeeping, not "what is an item." What's pinned here:
@@ -9,6 +9,8 @@ economy bookkeeping, not "what is an item." What's pinned here:
   - a request that clears energy but fails some other guard (the type
     cap, an invalid mob effect) never spends energy either
   - energy regenerates on a fixed per-tick schedule, capped at max_energy
+  - energy is per-owner (decisions.md #34): one owner's spending never
+    touches another's pool
 """
 
 from __future__ import annotations
@@ -19,9 +21,12 @@ from world.env import (
     KIND_BASE_COST,
     MAX_ITEM_TYPES,
     Action,
+    DEFAULT_OWNER,
     Environment,
     creation_cost,
 )
+
+OWNER = DEFAULT_OWNER
 
 
 @pytest.fixture
@@ -67,24 +72,24 @@ def test_creation_cost_clamps_out_of_range_strength():
 # --- spending -------------------------------------------------------------
 
 def test_affordable_creation_succeeds_and_deducts_exactly_its_cost(env):
-    before = env.energy
+    before = env.energy[OWNER]
     cost = creation_cost("item", 3)
 
     created = env.add_item_type("berry", "a sweet ripe berry", 3)
 
     assert created is True
-    assert env.energy == pytest.approx(before - cost)
+    assert env.energy[OWNER] == pytest.approx(before - cost)
     assert len(env.item_types) == 1
 
 
 def test_unaffordable_creation_is_rejected_and_spends_nothing(env):
-    env.energy = 1.0  # below even the cheapest item at strength 1
-    before = env.energy
+    env.energy[OWNER] = 1.0  # below even the cheapest item at strength 1
+    before = env.energy[OWNER]
 
     created = env.add_item_type("berry", "a sweet ripe berry", 1)
 
     assert created is False
-    assert env.energy == before
+    assert env.energy[OWNER] == before
     assert env.item_types == []
 
 
@@ -100,12 +105,12 @@ def test_each_kind_is_gated_by_its_own_cost(env, kind, create):
     """Not just create_item -- create_tile and create_mob are gated the
     same way, at their own (higher) cost.
     """
-    env.energy = creation_cost(kind, 5) - 0.01  # just short of affordable
+    env.energy[OWNER] = creation_cost(kind, 5) - 0.01  # just short of affordable
 
     created = create(env)
 
     assert created is False
-    assert env.energy == pytest.approx(creation_cost(kind, 5) - 0.01)
+    assert env.energy[OWNER] == pytest.approx(creation_cost(kind, 5) - 0.01)
 
 
 def test_type_cap_rejection_spends_no_energy(env):
@@ -114,15 +119,15 @@ def test_type_cap_rejection_spends_no_energy(env):
     guard order). Energy set high so only the cap, not affordability,
     is what's under test here.
     """
-    env.energy = 1000.0
+    env.energy[OWNER] = 1000.0
     for i in range(MAX_ITEM_TYPES):
         assert env.add_item_type(f"item {i}", "a plain object", 1) is True
-    before = env.energy
+    before = env.energy[OWNER]
 
     created = env.add_item_type("one too many", "a plain object", 1)
 
     assert created is False
-    assert env.energy == before
+    assert env.energy[OWNER] == before
     assert len(env.item_types) == MAX_ITEM_TYPES
 
 
@@ -131,38 +136,71 @@ def test_invalid_mob_effect_spends_no_energy(env):
     succeed (decisions.md #30's "nowhere to land") must never be
     charged for, regardless of whether energy was available.
     """
-    before = env.energy
+    before = env.energy[OWNER]
 
     created = env.add_mob_type("dragon", "breathe_fire", 5)
 
     assert created is False
-    assert env.energy == before
+    assert env.energy[OWNER] == before
     assert env.mob_types == []
+
+
+# --- per-owner isolation (decisions.md #34) -----------------------------
+
+def test_each_owner_has_their_own_energy_pool(env):
+    env.spawn_colony("rival", 1)
+    before_owner, before_rival = env.energy[OWNER], env.energy["rival"]
+
+    created = env.add_item_type("berry", "a sweet ripe berry", 3, owner="rival")
+
+    assert created is True
+    assert env.energy["rival"] == pytest.approx(before_rival - creation_cost("item", 3))
+    assert env.energy[OWNER] == before_owner  # untouched by a rival's spending
+
+
+def test_an_owner_with_no_energy_cant_spend_a_rivals(env):
+    env.spawn_colony("rival", 1)
+    env.energy["rival"] = 0.0
+
+    created = env.add_item_type("berry", "a sweet ripe berry", 1, owner="rival")
+
+    assert created is False
+    assert env.energy[OWNER] == 20.0  # the default owner's own budget, untouched
 
 
 # --- regeneration -----------------------------------------------------
 
 def test_energy_regenerates_each_tick(env):
-    env.energy = 10.0
+    env.energy[OWNER] = 10.0
     actions = {fly.id: Action.STAY for fly in env.flies}
 
     env.step(actions)
 
-    assert env.energy == pytest.approx(10.0 + env.energy_regen_per_tick)
+    assert env.energy[OWNER] == pytest.approx(10.0 + env.energy_regen_per_tick)
 
 
 def test_energy_regen_is_capped_at_max_energy(env):
-    env.energy = env.max_energy
+    env.energy[OWNER] = env.max_energy
     actions = {fly.id: Action.STAY for fly in env.flies}
 
     env.step(actions)
 
-    assert env.energy == env.max_energy
+    assert env.energy[OWNER] == env.max_energy
+
+
+def test_every_registered_owner_regenerates_not_just_the_default(env):
+    env.spawn_colony("rival", 1)
+    env.energy["rival"] = 5.0
+    actions = {fly.id: Action.STAY for fly in env.flies}
+
+    env.step(actions)
+
+    assert env.energy["rival"] == pytest.approx(5.0 + env.energy_regen_per_tick)
 
 
 def test_energy_resets_to_starting_energy_on_reset(env):
-    env.energy = 2.0
+    env.energy[OWNER] = 2.0
 
     env.reset()
 
-    assert env.energy == env.starting_energy
+    assert env.energy[OWNER] == env.starting_energy

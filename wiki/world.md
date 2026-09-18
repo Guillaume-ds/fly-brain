@@ -98,16 +98,28 @@ swamped by the name on a *real* encoder is still unverified
 can reach huggingface.co; everything above runs on the orthographic
 stub today).
 
-Creation also costs something now: `Environment.energy`, a single
-global pool (there's only one instruction source today) that
-`creation_cost(kind, strength)` draws down and a fixed per-tick regen
-refills — never tied to colony state (`decisions.md` #33). All three
-`add_*_type` methods return whether they actually created something,
-so a type-cap rejection, an unaffordable request, and success are three
-distinguishable outcomes rather than one silent no-op; `game/live_run.py`
-logs an understood-but-rejected request as `f"{name} (rejected)"`. The
+Creation also costs something now: `Environment.energy`, one pool per
+owner, that `creation_cost(kind, strength)` draws down and a fixed
+per-tick regen refills — never tied to colony state (`decisions.md`
+#33, keyed by owner since #34). All three `add_*_type` methods return
+whether they actually created something, so a type-cap rejection, an
+unaffordable request, and success are three distinguishable outcomes
+rather than one silent no-op; `game/live_run.py` logs an
+understood-but-rejected request as `f"{name} (rejected)"`. The
 translating LLM never sees the balance — the environment enforces it
 the same way it already enforces `effect`/`strength` validity, silently.
+
+Instructions also carry a real owner now (`decisions.md` #34): `owner`
+is supplied by the caller (`game/live_run.py`'s request queue), never
+by the translating controller, since it's session identity, not
+request content — `WorldController.choose_action()` itself is
+unchanged, owner-agnostic on purpose. `create_item`/`create_tile`/
+`create_mob` gained an optional `target` field (`"own"` or a named
+rival) so a spawned instance can land near a specific territory
+instead of anywhere on the grid; omitted, spawning is exactly what it
+always was. `target` needed a new `required_arguments` mechanism on
+`ActionSpec` since it's the first optional field any schema here has
+had — every other field stays mandatory.
 
 **What's left:**
 - done recently: `create_tile` and `create_mob` (`decisions.md`
@@ -115,16 +127,19 @@ the same way it already enforces `effect`/`strength` validity, silently.
   meaning "always dangerous" the moment it could be beneficial; the
   action registry's argument mechanism generalized from one free-text
   field to a real per-action schema; the resource-cost system
-  (`decisions.md` #33) gating all three
+  (`decisions.md` #33) gating all three; `owner`/`target` threading and
+  per-owner energy (`decisions.md` #34, #35)
 - next: a live test of `ClaudeController` with a real key, and the
   `measure_encoder` run above against the real encoder; the energy
   constants (`STARTING_ENERGY`/`MAX_ENERGY`/regen rate/per-kind cost)
   are placeholders, not tuned by actually playing yet
-- later: a second instruction source (the two-player mode, #29) —
-  nothing in this surface is single-player-shaped, but nothing
-  multiplexes it either, and the energy pool is structured to key by
-  player once one exists (`decisions.md` #34); a preview/confirm step
-  showing a request's derived numbers and cost before committing
+- later: a second *concurrent* instruction source — the plumbing for
+  multiple owners exists and is tested (`Environment.spawn_colony()`/
+  `Colony.add_colony()`, `decisions.md` #34), but `game/live_run.py`'s
+  CLI still only reads from one local stdin stream, tagged to one
+  default owner; an actual second input source (a second terminal, a
+  socket, the eventual frontend) is still unbuilt. A preview/confirm
+  step showing a request's derived numbers and cost before committing
   (raised, not designed, needs the frontend)
 
 **Logic for testing:** contract = any `WorldController`, given the same

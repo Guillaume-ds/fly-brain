@@ -42,7 +42,7 @@ def rollout(agent: EscapeAgent, env: Environment) -> float:
         result = env.step(actions)
         ticks_survived += 1.0
         observations = result.observations
-        if result.colony_extinct or result.timed_out:
+        if all(result.colony_extinct.values()) or result.timed_out:
             break
     return ticks_survived
 

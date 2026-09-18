@@ -57,21 +57,20 @@ its description, produces a state delta that's fully explained by
 **What it is:** anonymously — an attribute vector and a relative
 position per nearby thing, nothing that says what it is.
 
-**Where we stand:** built and tested (`decisions.md` #22 part 1, #25).
+**Where we stand:** built and tested (`decisions.md` #22 part 1, #25,
+#34, #35). Multi-colony ownership extended *who* gets perceived —
+every fly now perceives every other fly, own or rival, through
+`observe()` — without touching *what* a Percept can contain: each
+owner has a fixed, exactly orthogonal vector, distinguishable across
+owners so a colony can learn per-rival valence, but the Percept itself
+is still exactly `attributes, dx, dy, distance` — no owner field, ever.
 
 **What's left:**
 - done recently: replacing the old fixed `food_signal`/`threat_signal`
-  fields with an open-ended `Percept` list
+  fields with an open-ended `Percept` list; extending perception to
+  other flies for multi-colony ownership (`decisions.md` #34, #35)
 - next: nothing planned for `Percept`'s own shape — this is considered
-  settled and foundational. Multi-colony ownership (`decisions.md` #34,
-  revised by #35, designed not implemented) extends *who* gets
-  perceived — every fly would perceive every other fly, friend or
-  rival — but not *what* a Percept can contain: each owner gets a
-  fixed, exactly orthogonal vector (distinguishable across owners, so a
-  colony can learn per-rival valence) rather than one shared generic
-  one, but the Percept itself is still exactly `attributes, dx, dy,
-  distance` — no owner field, ever — so the contract below stays
-  exactly as strict as it already is
+  settled and foundational
 
 **Logic for testing:** contract = `Observation.nearby` never contains
 anything but `Percept(attributes, dx, dy, distance)` — no field, no

@@ -65,6 +65,20 @@ class Colony:
     def spawn_plasticity_agent(self, prior_gains: np.ndarray | None) -> PlasticityAgent:
         return PlasticityAgent(self.plasticity_template, initial_gains=prior_gains)
 
+    def add_colony(self, owner: str, population: int, initial_escape_gains: np.ndarray) -> list[int]:
+        """Adds a second (or Nth) colony to an already-running Colony
+        wrapper -- mirrors env.spawn_colony() (decisions.md #34) but
+        also builds each new fly's brain agents, exactly as __init__
+        does for the first one. Refreshes `observations` so the next
+        step() call includes them. Returns the new fly ids.
+        """
+        new_flies = self.env.spawn_colony(owner, population)
+        for fly in new_flies:
+            self.escape_agents[fly.id] = self.spawn_escape_agent(initial_escape_gains)
+            self.plasticity_agents[fly.id] = self.spawn_plasticity_agent(None)
+        self.observations = {**self.observations, **{fly.id: self.env.observe(fly) for fly in new_flies}}
+        return [fly.id for fly in new_flies]
+
     def state_of(self, fly: Fly) -> dict[Channel, int]:
         """A fly's current value on every channel a Result can move --
         read straight off the enum so this can't drift from the world's
@@ -159,7 +173,7 @@ def run_colony(colony: Colony, max_ticks: int, audit_every: int = 50) -> list[in
                 "tick %4d  plasticity audit: mean gain drift=%.3f, reinforcement events=%d",
                 colony.env.tick, summary["mean_gain_drift"], summary["total_reinforcement_events"],
             )
-        if result.colony_extinct:
+        if all(result.colony_extinct.values()):
             logger.info("Colony extinct at tick %d", colony.env.tick)
             break
     return population_history
