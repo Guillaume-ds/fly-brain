@@ -90,7 +90,18 @@ wired in, not two.
   parameter in a request simply has nowhere to go in the schema, so it
   is dropped silently rather than tempting anything to widen the
   engine. **Proposed, not yet designed or approved** — no code
-  written
+  written. Gated on one measurement first: a creatable mob's *name*
+  has to reach the encoder (otherwise every mob sharing a
+  type/strength shares one vector and flies can't tell a spider from a
+  wasp), but a food-sounding name on a lethal mob then perceives as
+  food — and the escape reflex is frozen for life, so unlike the
+  plasticity circuit it can never learn around a convincing mimic. The
+  proposed answer is to compose the embedded string from the name plus
+  a mandatory mechanical clause phrased in the Result registry's own
+  vocabulary, so the mimicry is imperfect. Whether that clause survives
+  being swamped by the name is empirical: `python -m
+  world.measure_encoder --encoder nomic` measures it, and needs a
+  machine that can reach huggingface.co
 - also next: a live test of `ClaudeController` with a real key
 - later: a second instruction source (the two-player mode, #29) —
   nothing in this surface is single-player-shaped, but nothing
