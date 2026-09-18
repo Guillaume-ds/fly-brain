@@ -12,7 +12,8 @@ see #13 for why that was dropped.
 |---|---|
 | Connectome data access (`fly_brain/data.py`) | done |
 | Connectome exploration (`analyze`, `simulate` commands) | done |
-| `world/env.py` — multi-fly, continuous spawn-rate params, threat movement | done, tested (`decisions.md` #14, #15, #20) |
+| `world/env.py` — multi-fly, continuous spawn-rate params, threat movement, anonymous `Percept` observation | done, tested (`decisions.md` #14, #15, #20, #25) |
+| `world/items.py`, `world/results.py` — item-encoding pipeline + Result registry | done, tested (`decisions.md` #24, #25); real `NomicItemEncoder` untested live (`huggingface.co` blocked here) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -52,19 +53,21 @@ see #13 for why that was dropped.
 All six immediate next steps above are done. Now implementing the
 sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
 
-7. **Phase 1: `world/items.py`, the item-encoding pipeline** — done,
-   see `decisions.md` #24. `ItemEncoder` swap point, `NomicItemEncoder`
+7. ~~Phase 1: `world/items.py`, the item-encoding pipeline~~ done, see
+   `decisions.md` #24. `ItemEncoder` swap point, `NomicItemEncoder`
    (real backend, untested live — `huggingface.co` blocked in this dev
    environment) and `HashingItemEncoder` (tested stub).
-8. Phase 2: anonymous `Percept`/`Observation`, `Fly` health/`stuck_ticks`
-   state, the Result registry (`food`/`damage`/`immobilize`) — not
-   started. Blocked on resolving one open design point: how the escape
-   circuit gets its stimulus without a named `threat_signal` field once
-   `Observation` no longer has one (proposed: reuse the same
-   reference-vector-similarity mechanism via a `danger` concept — not
-   yet confirmed).
-9. Phase 3: the KC/MBON/DAN circuit + dopamine-gated plasticity rule
-   (`fly_brain/`) — not started.
+8. ~~Phase 2: anonymous `Percept`/`Observation`, `Fly` health/
+   `stuck_ticks`, the Result registry~~ done, see `decisions.md` #25.
+   The open design point from #24 (how the escape circuit gets its
+   stimulus without `threat_signal`) is resolved: `sense_danger()`
+   sums clipped-cosine-similarity to a `danger_vector` across every
+   nearby percept. Retrained stage 1 from scratch against the new
+   stimulus (baseline 65.3 → 80.0 fitness) and verified the full
+   pipeline live in `colony_run.py` (real food pickups changing
+   hunger/stuck_ticks were traced during an actual run).
+9. **Phase 3: the KC/MBON/DAN circuit + dopamine-gated plasticity rule**
+   (`fly_brain/`) — not started. Next up.
 10. Phase 4: `training/colony.py` integration (both circuits per fly,
     prior-vs-live gain split on reproduction) — not started.
 

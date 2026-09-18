@@ -10,16 +10,25 @@ training/ uses this same class rather than a separate one.
 
 increase_/decrease_spider_rate and increase_/decrease_food_rate are
 director/'s control surface.
+
+A fly's observation is an anonymous list of Percepts (attribute vector +
+relative position, no name/type/id) rather than named per-type fields --
+see wiki/decisions.md #22. What an item actually does to a fly (heal,
+hurt, immobilize) comes from the Result registry (world/results.py), a
+similarity blend against the item's attribute vector, never a hardcoded
+per-type constant.
 """
 
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from .entities import Fly, Food, Position, Threat
+from .items import HashingItemEncoder, ItemEncoder, encode_with_jitter
+from .results import ResultConcept, build_default_results, blend_deltas
 
 SPAWN_RATE_BOUNDS = (0.0, 0.2)  # min/max per-tick spawn probability
 SPAWN_RATE_STEP = 0.02  # fixed nudge used by increase_*/decrease_*
@@ -43,37 +52,23 @@ MOVES: dict[Action, tuple[int, int]] = {
 
 
 @dataclass
-class SensorReading:
-    signal: float  # 0 (out of range) .. 1 (right on top of it)
-    dx: float  # unit direction to the sensed entity; 0 if out of range
+class Percept:
+    attributes: np.ndarray  # unit-norm item vector -- no name/type/id, see decisions.md #22 part 1
+    dx: float  # unit direction to the percept; 0 if distance is ~0
     dy: float
+    distance: float  # raw distance -- consumers decide their own proximity weighting
 
 
 @dataclass
 class Observation:
-    food_signal: float
-    food_dx: float
-    food_dy: float
-    threat_signal: float
-    threat_dx: float
-    threat_dy: float
-    hunger: float  # current_hunger / max_hunger -- always known, not sensed
-
-    def as_array(self) -> np.ndarray:
-        return np.array(
-            [
-                self.food_signal, self.food_dx, self.food_dy,
-                self.threat_signal, self.threat_dx, self.threat_dy,
-                self.hunger,
-            ],
-            dtype=np.float32,
-        )
+    nearby: list[Percept] = field(default_factory=list)
+    hunger: float = 0.0  # current_hunger / max_hunger -- always known, not sensed
 
 
 @dataclass
 class ColonyStepResult:
     observations: dict[int, Observation]  # fly id -> observation, alive flies only
-    deaths: dict[int, str]  # fly id -> cause ("threat" | "starved")
+    deaths: dict[int, str]  # fly id -> cause ("threat" | "starved" | "damage")
     births: dict[int, int]  # new fly id -> parent fly id
     colony_extinct: bool
     timed_out: bool
@@ -102,6 +97,12 @@ class Environment:
         offspring_spawn_radius: int = 2,
         food_enabled: bool = True,
         threats_enabled: bool = True,
+        max_health: int = 100,
+        max_stuck_ticks: int = 10,
+        encoder: ItemEncoder | None = None,
+        food_description: str = "a nourishing piece of food",
+        threat_description: str = "a fast, venomous spider",
+        item_jitter_sigma: float = 0.05,
         seed: int | None = None,
     ) -> None:
         self.grid_size = grid_size
@@ -122,6 +123,15 @@ class Environment:
         self.reproduction_hunger_cost_fraction = reproduction_hunger_cost_fraction
         self.reproduction_vulnerability_ticks = reproduction_vulnerability_ticks
         self.offspring_spawn_radius = offspring_spawn_radius
+        self.max_health = max_health
+        self.max_stuck_ticks = max_stuck_ticks
+        self.encoder = encoder or HashingItemEncoder()
+        self.food_description = food_description
+        self.threat_description = threat_description
+        self.item_jitter_sigma = item_jitter_sigma
+        self.results: list[ResultConcept] = build_default_results(
+            self.encoder, max_hunger=self.max_hunger, max_health=self.max_health, max_stuck_ticks=self.max_stuck_ticks,
+        )
         self.rng = np.random.default_rng(seed)
 
         self.flies: list[Fly]
@@ -156,7 +166,7 @@ class Environment:
         return {fly.id: self.observe(fly) for fly in self.flies}
 
     def spawn_fly(self, position: Position) -> Fly:
-        fly = Fly(id=self.next_fly_id, position=position, hunger=self.max_hunger)
+        fly = Fly(id=self.next_fly_id, position=position, hunger=self.max_hunger, health=self.max_health)
         self.next_fly_id += 1
         return fly
 
@@ -215,6 +225,9 @@ class Environment:
             if fly.vulnerable_ticks_left > 0:
                 fly.vulnerable_ticks_left -= 1
                 action = Action.STAY
+            elif fly.stuck_ticks > 0:
+                fly.stuck_ticks -= 1
+                action = Action.STAY
             else:
                 action = actions[fly.id]
             dx, dy = MOVES[action]
@@ -229,17 +242,29 @@ class Environment:
 
     def spawn_entities(self) -> None:
         if len(self.threats) < self.max_spiders and self.rng.random() < self.spider_spawn_rate:
-            self.threats.append(Threat(self.random_empty_cell(self.occupied_cells()), self.threat_radius))
+            attributes = encode_with_jitter(self.encoder, self.threat_description, self.item_jitter_sigma, self.rng)
+            self.threats.append(Threat(self.random_empty_cell(self.occupied_cells()), self.threat_radius, attributes))
         if len(self.food) < self.max_food and self.rng.random() < self.food_spawn_rate:
-            self.food.append(Food(self.random_empty_cell(self.occupied_cells()), self.food_radius))
+            attributes = encode_with_jitter(self.encoder, self.food_description, self.item_jitter_sigma, self.rng)
+            self.food.append(Food(self.random_empty_cell(self.occupied_cells()), self.food_radius, attributes))
 
     def resolve_food_pickup(self) -> None:
         for fly in self.flies:
             for food in self.food:
                 if fly.position.distance_to(food.position) <= food.pickup_radius:
-                    fly.hunger = self.max_hunger
+                    self.apply_result(fly, food.attributes)
                     self.food.remove(food)
                     break
+
+    def apply_result(self, fly: Fly, attributes: np.ndarray) -> None:
+        """The real mechanical effect of an item on a fly -- a
+        clipped-cosine-similarity blend across the Result registry, see
+        world/results.py and decisions.md #22 part 5.
+        """
+        deltas = blend_deltas(attributes, self.results)
+        fly.hunger = int(min(self.max_hunger, max(0, fly.hunger + deltas.get("hunger", 0.0))))
+        fly.health = int(min(self.max_health, max(0, fly.health + deltas.get("health", 0.0))))
+        fly.stuck_ticks = min(self.max_stuck_ticks, max(0, fly.stuck_ticks + round(deltas.get("stuck_ticks", 0.0))))
 
     def resolve_reproduction(self) -> dict[int, int]:
         """See wiki/decisions.md #20 for the formula and why it's shaped
@@ -292,33 +317,37 @@ class Environment:
         )
         if fly_on_a_threat:
             return "threat"
+        if fly.health <= 0:
+            return "damage"
         if fly.hunger <= 0:
             return "starved"
         return None
 
-    def sense_nearest(self, origin: Position, positions: list[Position], radius: float) -> SensorReading:
-        nearest_dist, nearest_pos = None, None
-        for pos in positions:
-            dist = origin.distance_to(pos)
-            if dist <= radius and (nearest_dist is None or dist < nearest_dist):
-                nearest_dist, nearest_pos = dist, pos
-
-        if nearest_pos is None:
-            return SensorReading(signal=0.0, dx=0.0, dy=0.0)
-
-        signal = 1.0 - nearest_dist / radius if radius > 0 else 1.0
-        dx, dy = nearest_pos.x - origin.x, nearest_pos.y - origin.y
+    def perceive(self, origin: Position, target: Position, attributes: np.ndarray, radius: float) -> Percept | None:
+        """A percept is anonymous by construction: only the entity's
+        attribute vector and relative position ever get returned here,
+        nothing that reveals what world-internal type it came from (see
+        decisions.md #22 part 1). `radius` decides visibility only --
+        it's a world-internal cutoff, not part of what the fly receives.
+        """
+        distance = origin.distance_to(target)
+        if distance > radius:
+            return None
+        dx, dy = target.x - origin.x, target.y - origin.y
         norm = max((dx ** 2 + dy ** 2) ** 0.5, 1e-6)
-        return SensorReading(signal=signal, dx=dx / norm, dy=dy / norm)
+        return Percept(attributes=attributes, dx=dx / norm, dy=dy / norm, distance=distance)
 
     def observe(self, fly: Fly) -> Observation:
-        food = self.sense_nearest(fly.position, [f.position for f in self.food], self.food_radius)
-        threat = self.sense_nearest(fly.position, [t.position for t in self.threats], self.threat_radius)
-        return Observation(
-            food_signal=food.signal, food_dx=food.dx, food_dy=food.dy,
-            threat_signal=threat.signal, threat_dx=threat.dx, threat_dy=threat.dy,
-            hunger=fly.hunger / self.max_hunger,
-        )
+        nearby: list[Percept] = []
+        for food in self.food:
+            percept = self.perceive(fly.position, food.position, food.attributes, self.food_radius)
+            if percept is not None:
+                nearby.append(percept)
+        for threat in self.threats:
+            percept = self.perceive(fly.position, threat.position, threat.attributes, self.threat_radius)
+            if percept is not None:
+                nearby.append(percept)
+        return Observation(nearby=nearby, hunger=fly.hunger / self.max_hunger)
 
 
 def clamp_rate(rate: float) -> float:

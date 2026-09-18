@@ -8,6 +8,7 @@ import pathlib
 
 from fly_brain.agent import build_escape_template
 from world.env import Environment
+from world.items import HashingItemEncoder
 
 from .colony import Colony, load_starting_gains, run_colony
 from .run import CHECKPOINT_DIR
@@ -32,13 +33,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
 
-    template = build_escape_template()
+    encoder = HashingItemEncoder()
+    template = build_escape_template(encoder)
     gains = load_starting_gains(template, args.checkpoint)
 
     env = Environment(
         initial_population=args.initial_population,
         max_population=args.max_population,
         max_ticks=args.max_ticks,
+        encoder=encoder,
         seed=args.seed,
     )
     colony = Colony(env, template, gains, mutation_sigma=args.mutation_sigma, seed=args.seed)

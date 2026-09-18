@@ -23,54 +23,72 @@ verified before being wired together.
 
 ## `world/` — the game
 
-- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`,
-  `Fly` (id, position, hunger, `vulnerable_ticks_left`). No behavior,
-  just data.
-- **`items.py`** (new, `decisions.md` #22/#24, in progress) — the
-  content-authoring pipeline that turns a short text description into an
-  item instance's small, fixed-dimension attribute vector: `ItemEncoder`
-  is a swap point (same pattern as `director/`'s `WorldController`) —
-  `NomicItemEncoder` is the real backend (local, frozen
-  `nomic-embed-text-v1.5`, Matryoshka-truncated), **not exercised live in
-  this dev environment** (`huggingface.co` is policy-blocked here, same
-  situation as `ClaudeController` with no API credentials);
-  `HashingItemEncoder` is a zero-dependency, deterministic stub (feature
-  hashing over character trigrams — orthographic, not semantic) used to
-  test everything downstream without network access.
-  `encode_with_jitter()` adds per-instance Gaussian noise and
-  re-normalizes to unit norm, so every downstream consumer can use plain
-  cosine similarity. Entirely a content-authoring concern — never
-  exposed to a fly.
+- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`
+  (each carrying an `attributes` item vector, see `items.py` below),
+  `Fly` (id, position, hunger, `health`, `stuck_ticks`,
+  `vulnerable_ticks_left`). No behavior, just data.
+- **`items.py`** (`decisions.md` #22/#24) — the content-authoring
+  pipeline that turns a short text description into an item instance's
+  small, fixed-dimension attribute vector: `ItemEncoder` is a swap point
+  (same pattern as `director/`'s `WorldController`) — `NomicItemEncoder`
+  is the real backend (local, frozen `nomic-embed-text-v1.5`,
+  Matryoshka-truncated), **not exercised live in this dev environment**
+  (`huggingface.co` is policy-blocked here, same situation as
+  `ClaudeController` with no API credentials); `HashingItemEncoder` is a
+  zero-dependency, deterministic stub (feature hashing over character
+  trigrams — orthographic, not semantic) used to test everything
+  downstream without network access, and what every CLI entry point
+  actually runs today. `encode_with_jitter()` adds per-instance Gaussian
+  noise and re-normalizes to unit norm, so every downstream consumer can
+  use plain cosine similarity. Entirely a content-authoring concern —
+  never exposed to a fly.
+- **`results.py`** (`decisions.md` #22 part 5, #25) — the Result
+  registry: a small, fixed set of real mechanical outcomes
+  (`food`→`hunger`, `damage`→`health`, `immobilize`→`stuck_ticks`), each
+  encoded the same way items are. `blend_deltas()` is a
+  clipped-cosine-similarity blend across every registered Result,
+  applied simultaneously — the mechanism that lets one item be both
+  nourishing and damaging at once. The one place in this system that's
+  deliberately discrete rather than open-ended, on purpose.
 - **`env.py`** — the `Environment` class, multi-fly: `self.flies:
   list[Fly]` share one grid, one set of spiders/food, one hunger clock
   each. Food and threats spawn continuously (not placed once at reset) at
-  `spider_spawn_rate`/`food_spawn_rate`, and threats wander
+  `spider_spawn_rate`/`food_spawn_rate`, each stamped with an item vector
+  from `items.py` at spawn time, and threats wander
   (`threat_move_probability` chance of a random step per tick) — both
   needed for the escape circuit to have real, ongoing pressure to react
   to rather than a one-time, permanently-dodgeable placement (see
-  `decisions.md` #14, #15). Flies reproduce — a world-level stochastic
-  event, not an agent decision, gated by hunger + a population-based
-  `mate_availability` factor, with a real cost to the parent (hunger +
-  a forced-`STAY` vulnerability window); see `decisions.md` #20 for the
-  formula. `increase_/decrease_spider_rate` and
-  `increase_/decrease_food_rate` are the only way those rates change —
-  the control surface `director/` calls into. Exposes a Gym-style
-  interface: `reset() -> dict[fly_id, Observation]`,
-  `step(actions: dict[fly_id, Action]) -> ColonyStepResult(observations,
-  deaths, births, colony_extinct, timed_out)`. A population of 1 makes
-  reproduction structurally impossible (the formula), which is exactly
-  the single-fly curriculum-training case — one class serves both, no
-  separate single-fly environment. `food_enabled` / `threats_enabled`
-  flags mean training stages configure this one class differently rather
-  than needing separate environment implementations.
+  `decisions.md` #14, #15). Picking up food no longer just restores
+  hunger by a fixed amount — `apply_result()` runs the item's attribute
+  vector through the Result registry and applies whatever real
+  `hunger`/`health`/`stuck_ticks` deltas come out. A fly with
+  `stuck_ticks > 0` is forced to `STAY`, same pattern as the existing
+  `vulnerable_ticks_left` reproduction-cooldown mechanic. Flies
+  reproduce — a world-level stochastic event, not an agent decision,
+  gated by hunger + a population-based `mate_availability` factor, with a
+  real cost to the parent (hunger + a forced-`STAY` vulnerability
+  window); see `decisions.md` #20 for the formula.
+  `increase_/decrease_spider_rate` and `increase_/decrease_food_rate` are
+  the only way those rates change — the control surface `director/` calls
+  into. Exposes a Gym-style interface: `reset() -> dict[fly_id,
+  Observation]`, `step(actions: dict[fly_id, Action]) ->
+  ColonyStepResult(observations, deaths, births, colony_extinct,
+  timed_out)`. A population of 1 makes reproduction structurally
+  impossible (the formula), which is exactly the single-fly
+  curriculum-training case — one class serves both, no separate
+  single-fly environment. `food_enabled` / `threats_enabled` flags mean
+  training stages configure this one class differently rather than
+  needing separate environment implementations.
 
-The `Observation` the environment exposes is a fixed 7-value vector:
-`food_signal, food_dx, food_dy, threat_signal, threat_dx, threat_dy,
-hunger`. Food/threat signal and direction are **zero outside that entity's
-radius** — the fly gets no information about something it hasn't come
-close enough to sense (this is deliberate: it's what makes finding food an
-actual search problem instead of pure gradient-climbing from anywhere on
-the map). `hunger` is always visible (interoceptive, not sensed).
+The `Observation` the environment exposes is an **anonymous** `nearby:
+list[Percept]` plus `hunger` (`decisions.md` #22/#25) — each `Percept`
+carries only a unit-norm attribute vector and relative position (`dx,
+dy, distance`), no name, type, or id. An entity's own radius
+(`food_radius`/`threat_radius`) still decides visibility as a
+world-internal cutoff, exactly as the old fixed radii did, but that
+stays on the world's side of the boundary; only the anonymous `Percept`
+itself crosses it. `hunger` is always visible (interoceptive, not
+sensed).
 
 Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
 
@@ -89,20 +107,27 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   a `synaptic_gain` multiplier (init `1.0`), which is the one thing
   training is allowed to touch — see `decisions.md` on why topology/sign
   stay fixed.
-- **`agent.py`** — `build_escape_template()` does the expensive, shared
-  part once (load the connectome, expand the circuit, find the seed/motor
-  neuron indices) and returns an `EscapeCircuitTemplate`; `EscapeAgent
-  (template)` is cheap — a fresh `Circuit` off that shared blueprint, so a
-  colony of many flies builds the connectome/topology once and stamps out
-  one lightweight agent per fly. `EscapeAgent` wraps that `Circuit` as a
-  policy for the survival task: injects `threat_signal` as stimulus
-  current into `DNp01` (the Giant Fiber), and checks whether the real
-  downstream `TTMn` neuron (the jump-muscle motor neuron) spikes to decide
-  *whether* to flee. *Which direction* to flee is plain geometry (away
-  from the threat), computed outside the circuit — not something the
-  circuit decides. See `decisions.md` for why that split exists. No
-  foraging behavior yet — food/hunger are part of `Observation` but
-  unused here; a fly only eats what it happens to wander into.
+- **`agent.py`** — `build_escape_template(encoder, ...)` does the
+  expensive, shared part once (load the connectome, expand the circuit,
+  find the seed/motor neuron indices, encode a `danger_vector` from the
+  same `ItemEncoder` everything else uses) and returns an
+  `EscapeCircuitTemplate`; `EscapeAgent(template)` is cheap — a fresh
+  `Circuit` off that shared blueprint, so a colony of many flies builds
+  the connectome/topology once and stamps out one lightweight agent per
+  fly. `EscapeAgent` wraps that `Circuit` as a policy for the survival
+  task: `sense_danger()` computes cosine similarity between each nearby
+  anonymous `Percept` and `danger_vector` (clipped at 0, weighted by
+  proximity, **summed** across every matching percept so multiple
+  simultaneous threats are never less urgent than one), injects that as
+  stimulus current into `DNp01` (the Giant Fiber), and checks whether the
+  real downstream `TTMn` neuron (the jump-muscle motor neuron) spikes to
+  decide *whether* to flee. *Which direction* to flee is plain geometry
+  (away from the single nearest above-threshold percept), computed
+  outside the circuit — not something the circuit decides. See
+  `decisions.md` #5 for why that split exists, and #24/#25 for why
+  `sense_danger()` replaced a named `threat_signal` field once
+  `Observation` became anonymous. No foraging behavior yet — a fly only
+  eats what it happens to wander into.
 - **`analyze.py` / `simulate.py`** — the original standalone
   exploration/demo commands (`python -m fly_brain analyze|simulate`),
   independent of the survival-game project; still useful for poking at the
@@ -165,11 +190,13 @@ Environment.step({fly_id: action, ...}) -> ColonyStepResult.observations[fly_id]
         |
 EscapeAgent.act(Observation)      (that fly's own circuit/gains)
         |
-   inject threat_signal as current into DNp01
+   sense_danger(obs.nearby, danger_vector) -> (flee_dx, flee_dy, strength)
+        |
+   inject strength as current into DNp01
         |
    Circuit.step(current) -> spikes  (real topology, trainable gains)
         |
-   TTMn spiked? -> flee (direction = -threat direction) : STAY
+   TTMn spiked? -> flee (direction = -flee_dx/-flee_dy) : STAY
         |
         v
       Action  ->  Environment.step() on the next tick

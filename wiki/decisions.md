@@ -839,3 +839,92 @@ plasticity rule (fly_brain/); resolving how the escape circuit gets its
 stimulus without a named `threat_signal` field (open design point, not
 yet resolved — see discussion in the same session); `training/colony.py`
 integration.
+
+## 25. #22 implementation, phase 2: anonymous `Percept`s, Result registry, `Fly` health/`stuck_ticks`, escape circuit resolved
+
+**Context:** continuing #22's implementation. This phase replaces
+`Observation`'s fixed named fields with the anonymous `Percept` design
+(#22 part 1), builds the Result registry (#22 part 5), adds the
+`health`/`stuck_ticks` state it depends on, and resolves the one open
+design gap from #24: the escape circuit read `obs.threat_signal`
+directly, a field that no longer exists once `Observation` is anonymous.
+
+**`Observation` redesign** (`world/env.py`): `food_signal/dx/dy,
+threat_signal/dx/dy` replaced by `nearby: list[Percept]`, where
+`Percept(attributes, dx, dy, distance)` carries only a unit-norm item
+vector and relative position — no name, type, or id. `SensorReading`/
+`sense_nearest`/`Observation.as_array()` removed (grepped the whole repo
+first; nothing else referenced them). `Environment.perceive()` still
+uses each entity's own radius (`food_radius`/`threat_radius`) as a
+world-internal visibility cutoff — that stays type-specific on the
+world's side of the boundary, per #22's own rule; only the returned
+`Percept` is anonymous.
+
+**Result registry** (`world/results.py`, `ResultConcept` +
+`blend_deltas()` + `build_default_results()`): `food`/`damage`/
+`immobilize`, each encoded via the same `ItemEncoder` as items,
+mapped to `hunger`/`health`/`stuck_ticks`. `Environment.apply_result()`
+replaces the old fixed `fly.hunger = self.max_hunger` on pickup with the
+clipped-cosine-similarity blend across all three, applied simultaneously
+and clamped to each channel's bounds.
+
+**New `Fly` state**: `health: int` (starts at `max_health`) and
+`stuck_ticks: int` (starts at 0). `move_flies()` forces `STAY` and
+decrements `stuck_ticks` while it's positive, same pattern as the
+existing `vulnerable_ticks_left` reproduction-cooldown mechanic.
+`determine_fly_death()` gains a `"damage"` cause (`health <= 0`),
+alongside the existing `"threat"`/`"starved"`.
+
+**Escape circuit resolution** (`fly_brain/agent.py`, resolving #24's open
+gap, confirmed before implementing): `EscapeCircuitTemplate` gains a
+`danger_vector` (`encoder.encode("a dangerous, fast predator")`, computed
+once, same encoder as everything else). `sense_danger()` replaces the
+direct `obs.threat_signal` read: cosine similarity between each nearby
+percept and `danger_vector`, clipped at 0, weighted by `1/(1+distance)`,
+**summed across all matching percepts** (not just the nearest) so
+multiple simultaneous threats never look less urgent than one — then
+flee direction points away from the single nearest above-threshold
+percept, since fleeing needs one concrete direction even though the
+spike-triggering current is a sum. `build_escape_template()` now takes
+an `ItemEncoder` argument; every call site (`training/run.py`,
+`colony_run.py`, `live_run.py`) constructs one `HashingItemEncoder` and
+passes it to both `Environment` and `build_escape_template()` so both
+sides read attribute vectors in the same space.
+
+**Verified:**
+- `Environment` unit-level: a food-matching item on a full-hunger fly is
+  a no-op (correctly clamped); a "nourishing toxic dangerous poison
+  meat"-flavored item heals *and* damages the same fly in one call
+  (50→63 hunger, 100→41 health) — the Minecraft-style dual effect from
+  the original request; an unrelated item's cross-similarity is small
+  but non-zero under the crude hashing stub (expected — it's explicitly
+  orthographic, not semantic, see #24).
+- A web-flavored item sets `stuck_ticks`, and a fly with `stuck_ticks >
+  0` is confirmed forced to `STAY` even when a different action is
+  requested, decrementing correctly.
+- `health <= 0` confirmed to produce `"damage"` as the death cause.
+- **Retrained stage 1 from scratch** (`python -m training.run --stage 1`,
+  8 iterations, smoke-sized) against the new `sense_danger()` stimulus:
+  real `population_reward_std` every iteration (same discipline as #15),
+  fitness baseline 65.3 → 80.0 (max survival). The old checkpoint's gains
+  were tuned against the old signal's statistics and weren't expected to
+  transfer cleanly to the new one's different shape — retraining
+  confirms the new stimulus is real and trainable, not just
+  non-crashing. (Checkpoints are gitignored; the retrained one isn't
+  tracked.)
+- `training/colony_run.py` end to end: reproduction still fires (birth
+  observed), deaths still occur. Traced `Environment.apply_result()`
+  directly in a live `Colony` run: with threats present (so the fly
+  actually moves via real flee reactions) and food enabled, a real
+  pickup fired mid-run and visibly changed `hunger`/`stuck_ticks`. With
+  threats disabled, zero pickups occurred in 300 ticks — not a bug, the
+  known "no foraging behavior, only reacts to danger" limitation
+  (`decisions.md` #21) means a fly with nothing to flee from never moves
+  at all yet.
+- `training/live_run.py` re-run end to end after these changes — still
+  applies requests and quits cleanly.
+
+**Status:** phases 1–2 of #22 done and tested. Remaining: the KC/MBON/
+DAN circuit + dopamine-gated plasticity rule (phase 3); `training/
+colony.py` integration, including the prior-vs-live gain split on
+reproduction (phase 4).
