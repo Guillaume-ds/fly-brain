@@ -9,6 +9,12 @@ Plasticity offspring inherit the parent's INHERITED PRIOR plus mutation
 -- never whatever gains the parent's own synapses drifted to during its
 life, per decisions.md #22 part 3: learned associations aren't
 inherited, only the capacity to learn them is.
+
+Each fly also gets a WanderAgent (fly_brain/wander.py, decisions.md
+#39/#40): a fixed fallback movement reflex, fired only when a fly
+perceives nothing at all, inherited and mutated at birth the same way
+escape gains are -- fixed for a fly's whole lifetime, never touched by
+reinforce().
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import numpy as np
 
 from fly_brain.agent import EscapeAgent, EscapeCircuitTemplate
 from fly_brain.plasticity import PlasticityAgent, PlasticityCircuitTemplate
+from fly_brain.wander import DEFAULT_WANDER_PERSISTENCE, WanderAgent
 from world.env import Action, ColonyStepResult, Environment
 
 logger = logging.getLogger(__name__)
@@ -33,6 +40,8 @@ class Colony:
         initial_escape_gains: np.ndarray,
         mutation_sigma: float = 0.1,
         plasticity_mutation_sigma: float = 0.05,
+        wander_mutation_sigma: float = 1.0,
+        initial_wander_persistence: float = DEFAULT_WANDER_PERSISTENCE,
         seed: int | None = None,
     ) -> None:
         self.env = env
@@ -40,14 +49,17 @@ class Colony:
         self.plasticity_template = plasticity_template
         self.mutation_sigma = mutation_sigma
         self.plasticity_mutation_sigma = plasticity_mutation_sigma
+        self.wander_mutation_sigma = wander_mutation_sigma
         self.rng = np.random.default_rng(seed)
 
         self.observations = env.reset()
         self.escape_agents: dict[int, EscapeAgent] = {}
         self.plasticity_agents: dict[int, PlasticityAgent] = {}
+        self.wander_agents: dict[int, WanderAgent] = {}
         for fly_id in self.observations:
             self.escape_agents[fly_id] = self.spawn_escape_agent(initial_escape_gains)
             self.plasticity_agents[fly_id] = self.spawn_plasticity_agent(None)
+            self.wander_agents[fly_id] = self.spawn_wander_agent(initial_wander_persistence)
 
     @property
     def population(self) -> int:
@@ -62,7 +74,16 @@ class Colony:
     def spawn_plasticity_agent(self, prior_gains: np.ndarray | None) -> PlasticityAgent:
         return PlasticityAgent(self.plasticity_template, initial_gains=prior_gains)
 
-    def add_colony(self, owner: str, population: int, initial_escape_gains: np.ndarray) -> list[int]:
+    def spawn_wander_agent(self, persistence: float) -> WanderAgent:
+        return WanderAgent(persistence)
+
+    def add_colony(
+        self,
+        owner: str,
+        population: int,
+        initial_escape_gains: np.ndarray,
+        initial_wander_persistence: float = DEFAULT_WANDER_PERSISTENCE,
+    ) -> list[int]:
         """Adds a second (or Nth) colony to an already-running Colony
         wrapper -- mirrors env.spawn_colony() (decisions.md #34) but
         also builds each new fly's brain agents, exactly as __init__
@@ -73,6 +94,7 @@ class Colony:
         for fly in new_flies:
             self.escape_agents[fly.id] = self.spawn_escape_agent(initial_escape_gains)
             self.plasticity_agents[fly.id] = self.spawn_plasticity_agent(None)
+            self.wander_agents[fly.id] = self.spawn_wander_agent(initial_wander_persistence)
         self.observations = {**self.observations, **{fly.id: self.env.observe(fly) for fly in new_flies}}
         return [fly.id for fly in new_flies]
 
@@ -81,7 +103,17 @@ class Colony:
         for fly_id, obs in self.observations.items():
             plasticity_action = self.plasticity_agents[fly_id].sense_and_decide(obs)
             escape_action = self.escape_agents[fly_id].decide(obs)
-            actions[fly_id] = escape_action if escape_action is not None else plasticity_action
+            # wander_action is None whenever obs.nearby is non-empty -- i.e.
+            # exactly the ticks where plasticity_action would have been a
+            # real reactive decision, never STAY-because-blind. Only fires
+            # as a fallback under escape, same freeze+override precedence
+            # as always (decisions.md #5/#22): the reflex still wins.
+            wander_action = self.wander_agents[fly_id].decide(obs, self.rng)
+            actions[fly_id] = (
+                escape_action
+                if escape_action is not None
+                else wander_action if wander_action is not None else plasticity_action
+            )
 
         result = self.env.step(actions)
 
@@ -105,9 +137,14 @@ class Colony:
             plasticity_mutation = self.rng.normal(0, self.plasticity_mutation_sigma, size=parent_prior.shape)
             self.plasticity_agents[new_id] = self.spawn_plasticity_agent(parent_prior + plasticity_mutation)
 
+            parent_persistence = self.wander_agents[parent_id].persistence
+            wander_mutation = self.rng.normal(0, self.wander_mutation_sigma)
+            self.wander_agents[new_id] = self.spawn_wander_agent(parent_persistence + wander_mutation)
+
         for dead_id in result.deaths:
             del self.escape_agents[dead_id]
             del self.plasticity_agents[dead_id]
+            del self.wander_agents[dead_id]
 
         self.observations = result.observations
         return result

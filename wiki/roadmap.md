@@ -31,11 +31,11 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Reproduction mechanic — multi-fly `Environment`, stochastic trigger, parent cost | **done, tested** (`decisions.md` #20) |
 | `game/colony.py` — per-fly circuits/genomes (escape + plasticity), offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21, #26) — real natural birth observed in a full run, colony driven by actual trained/learning circuits end to end |
 | `fly_brain/plasticity.py` — KC/MBON/DAN circuit, dopamine-gated lifetime plasticity, audit hooks | **done, tested** (`decisions.md` #26) — real learning curves verified (reward, punishment, generalization), wired into `Colony`, prior-vs-live gain split verified on reproduction |
-| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); attribution (#37), hunger-loss punishment (#38), and sensing radius (#39) all fixed, but a fly with nothing sensed still just sits — no wander/movement mechanism exists yet, so it still can't get within sensing range of food on its own |
+| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); attribution (#37), hunger-loss punishment (#38), sensing radius (#39), and evolved wander (#40) all fixed now — exploration-bootstrapping is closed on both halves. Not yet checked: whether a real, longer colony run actually forages well as a result (only a short isolated-effect comparison exists so far) |
 | `tests/` — contract tests (item contract, mutation-verified) | **done** (`decisions.md` #28) |
 | Live game loop (`game/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
 | Stage 2 (noisy escape) | **done, smoke-test trained** (`decisions.md` #36) — real fitness signal with food percepts present alongside the spider; a longer real run is still future work, same caveat as stage 1 |
-| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37), hunger-loss punishment (#38), and sensing radius (#39) are all fixed now; actual foraging success is still blocked on the movement half of exploration-bootstrapping (nothing yet gets a fly moving when it senses nothing), unrelated to training |
+| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37), hunger-loss punishment (#38), sensing radius (#39), and evolved wander (#40) are all fixed now — every piece the design called for is in place; a real, longer colony-scale foraging run hasn't been done yet to confirm it all adds up in practice |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
 | Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19), not started — deliberately deferred until the core Python game loop works end to end |
@@ -249,17 +249,33 @@ yet started (see "After that" below).
   over — a longer sensed approach doesn't automatically out-learn an
   instant contact, since per-tick signal strength falls off with
   distance.
+- ~~Evolved wander~~ done, see `decisions.md` #40. Closed the movement
+  half of exploration-bootstrapping that #39 left open: `WanderAgent`
+  (`fly_brain/wander.py`) fires only when a fly perceives nothing at
+  all, moving in bouts (re-picking direction with probability
+  `1/persistence` each blind tick, holding it otherwise) instead of
+  jittering or sitting frozen. `wander_persistence` is inherited and
+  mutated at birth exactly like escape gains — never touched by
+  `reinforce()`, since credit assignment happens for free at the
+  generational timescale (a fly's wander genome already gates its own
+  reproduction eligibility through the hunger threshold). Wired in as a
+  third fallback tier, `escape > wander > plasticity`; zero changes to
+  `PlasticityAgent`. Verified live across 5 seeds, wander on vs. off:
+  never worse, meaningfully better in 3/5 (survival 147 vs. 99 ticks,
+  169 vs. 122; real learning, `gain_drift` 0.585 vs. 0.0, 0.871 vs.
+  0.249) — the two ties reported honestly as a sparse-world luck limit,
+  not cherry-picked away.
 - **What's still open** — decay itself remains deliberately unpunished
   (a colony that quietly starves without ever touching a `starve` mob
-  still gets no punishment signal from that decline). #39 fixed *sensing*
-  — a fly can now smell food from a real distance — but not *movement*:
-  a fly with nothing sensed at all still just sits (`Action.STAY`), so it
-  still can't get within sensing range of food on its own. An evolved
-  wander behavior is the agreed next piece (design discussed, not yet
-  implemented) — that's what's actually standing between "the
+  still gets no punishment signal from that decline). Exploration-
+  bootstrapping itself is now closed on both halves (#39 sensing, #40
+  movement) — that's what was actually standing between "the
   freeze+override mechanism works, attribution/hunger-loss
-  punishment/sensing are all correct" (#36, #37, #38, #39) and "the
-  colony forages well."
+  punishment/sensing/movement are all correct" (#36, #37, #38, #39, #40)
+  and "the colony forages well." Whether it now *actually* forages well
+  in a real, longer run hasn't been checked — the 5-seed comparison
+  above is short (300 ticks, population capped at 1) and about isolating
+  wander's effect, not a full colony playtest.
 - REINFORCE implementation, compared against ES on the same stage-1 task.
 - **Open-ended world** — replace the fixed-size grid with true open-ended,
   randomly-generated terrain, plus the spiderweb v2 mechanic (spiders drop

@@ -93,29 +93,34 @@ no matter how many new item types get created.
 
 ### How does it act on what it perceives?
 
-**What it is:** two circuits, not one — an innate reflex fixed for life
-that always wins when it fires, and a learned valence circuit
-underneath it that decides approach-or-avoid the rest of the time.
+**What it is:** three tiers, not two — an innate reflex fixed for life
+that always wins when it fires, a fixed evolved wander fallback that
+fires only when there's nothing to react to, and a learned valence
+circuit underneath both that decides approach-or-avoid the rest of the
+time.
 
-**Where we stand:** both built, both tested, combined via the
-freeze+override rule (`decisions.md` #5, #22, #26).
+**Where we stand:** all three built and tested, combined via
+`escape > wander > plasticity` (`decisions.md` #5, #22, #26, #40).
 
 **What's left:**
 - done recently: `EscapeAgent.decide()` returning `None` instead of
   forcing `STAY`, so `Colony` can fall through to the plasticity
-  circuit's own decision (#26)
+  circuit's own decision (#26); `WanderAgent` added as a third fallback
+  tier under escape — fired only when `obs.nearby` is empty, so a fly is
+  no longer permanently frozen with nothing perceptible nearby (#40)
 - next: nothing specifically planned — stage 2/3 curriculum (noisier
   escape training, a trained foraging pathway) would extend the reflex
   side, not this split itself
 
 **Logic for testing:** contract = whenever the escape circuit's `TTMn`
-neuron spikes, the fly's action is always the escape decision, never the
-plasticity circuit's; whenever it doesn't, the fly's action is always
-the plasticity circuit's. Test by feeding a `Colony` a scenario with a
-clearly dangerous percept (forces a spike) and a clearly neutral one
-(no spike) and asserting the resulting action matches the expected
-source in each case — checks the override *rule*, not either circuit's
-internal correctness.
+neuron spikes, the fly's action is always the escape decision, never
+wander's or the plasticity circuit's; whenever nothing is perceived at
+all, the action is always wander's (unless escape overrides it); in
+every other case, the action is always the plasticity circuit's. Test by
+feeding a `Colony` a scenario with a clearly dangerous percept (forces a
+spike), an empty-percept blind tick, and a clearly neutral non-empty one,
+asserting each resolves to its expected source — checks the override
+*rule*, not any one tier's internal correctness.
 
 ---
 
@@ -162,15 +167,14 @@ credited at all, not that it's credited *more*.
   approach, not just the final contact tick (#39)
 - next: decay itself remains deliberately unpunished (#38) — a colony
   that quietly starves without ever touching a `starve` mob still gets
-  no punishment signal from that decline. #39 fixed the *sensing* half
-  of exploration-bootstrapping (a fly can now smell food from a real
-  distance) but not the *movement* half — a fly with nothing sensed at
-  all still does nothing but `STAY` (`PlasticityAgent.
-  _valence_to_action()`), so it still can't get within sensing range of
-  food on its own. An evolved wander behavior — agreed in design
-  discussion, not yet implemented — is the next piece. A real semantic
-  encoder (see world.md) would make *what* gets learned more meaningful
-  without changing *how* learning works
+  no punishment signal from that decline. Exploration-bootstrapping
+  itself is now closed on both halves (#39 sensing, #40 movement) — see
+  "How does it act on what it perceives?" above for the movement piece,
+  deliberately kept *outside* `reinforce()` (evolved, not learned) since
+  there's no percept-tied synapse for a wandering behavior to reinforce
+  in the first place. A real semantic encoder (see world.md) would make
+  *what* gets learned more meaningful without changing *how* learning
+  works
 
 **Logic for testing:** contract = repeatedly reinforcing the same
 percept with a consistent-sign outcome must move `probe()`'s valence
@@ -188,20 +192,27 @@ above immediately if it had existed first.
 **What it is:** a separate, slower mechanism from lifetime learning.
 Reproduction is stochastic and costs the parent; offspring inherit a
 mutated *starting point* — for the reflex circuit that's evolved gains,
-for the plasticity circuit specifically the inherited prior, never what
-a parent personally learned. Selection only acts here.
+for the plasticity circuit specifically the inherited prior, for the
+wander fallback its persistence scalar — never what a parent personally
+learned (there's nothing to learn for wander in the first place: it's
+never touched by `reinforce()` at all). Selection only acts here.
 
 **Where we stand:** reproduction mechanic and the prior-vs-live gain
 split both built and verified directly (`decisions.md` #20, #21, #22
 part 3, #26). ES trains the reflex circuit before a session starts.
+`WanderAgent.persistence` inherits and mutates the same way as of #40 —
+a third example of this pattern, and the first trait evolution shapes
+that was never a connectome-derived circuit at all.
 
 **What's left:**
 - done recently: verifying offspring gains match a parent's *prior*,
-  not its lifetime-drifted live gains (#26)
+  not its lifetime-drifted live gains (#26); wander persistence added as
+  a third inherited-and-mutated trait, verified live across 5 seeds to
+  actually matter for survival/learning outcomes (#40)
 - next: no evolutionary process exists yet for the plasticity circuit's
   *own* prior/hyperparameters — it always starts untrained (gain=1.0).
-  Evolution currently only toughens the reflex, never the capacity to
-  learn
+  Evolution currently toughens the reflex and shapes wander, but never
+  the capacity to learn
 
 **Logic for testing:** contract = an offspring's plasticity genome
 always equals `parent.prior_gains + mutation`, never

@@ -2543,3 +2543,78 @@ still reinforces on arrival. `tests/test_item_contract.py`'s
 around the new sensing boundary, plus a new companion test pinning the
 split's whole point — something well outside its *interaction* radius
 is still sensed. 99 tests passing total.
+
+## 40. Evolved wander: `WanderAgent`, closing exploration-bootstrapping
+
+**Context:** the movement half of the gap #39 left open — a fly that
+perceives nothing does nothing but `Action.STAY` (`PlasticityAgent.
+_valence_to_action()`); there was no fallback movement anywhere in the
+codebase, confirmed directly by grep before any of #39/#40 started. Of
+the four options discussed (fixed random-walk reflex, persistent-
+direction wander, evolved wander bias, intrinsic curiosity reward), the
+user picked **evolved wander bias**: wander behavior itself as an
+inherited, mutated-at-birth trait, selected for across generations —
+not something `reinforce()` ever touches.
+
+**Why evolution sidesteps the credit-assignment question that came up
+alongside it:** the user asked whether a fly could learn from its past
+*actions*, not just its latest one (e.g. "smelled food at distance 5,
+walked 5 steps toward it, got rewarded"). Traced through the code: no,
+not naturally — `reinforce()` only ever updates KC→MBON synapses tied to
+*percept attributes*; there's no synapse representing "I moved LEFT" for
+a Hebbian rule to touch, and wandering happens exactly when there's no
+percept, so there's nothing for even an extended eligibility trace to
+hold onto. (#39 separately confirmed the *existing* trace already
+credits multi-tick *sensed* approaches once something is perceptible —
+a different, narrower question, already solved.) Evolved wander avoids
+needing this at all: `resolve_reproduction()` gates on `fly.hunger >
+reproduction_hunger_threshold` (`world/env.py`), so a fly's wander
+genome already feeds directly into whether it gets to reproduce —
+credit assignment happens at the generational timescale (differential
+survival/reproduction), not inside a lifetime learning rule.
+
+**Design:** `fly_brain/wander.py`, `WanderAgent` — structurally parallel
+to `EscapeAgent`, not `PlasticityAgent`: a single evolved scalar,
+`wander_persistence` (mean ticks held before re-picking a direction,
+bounds `(1.0, 20.0)`, default `5.0`), fixed for a fly's whole lifetime,
+inherited from its parent plus mutation at birth exactly like escape
+gains are (`Colony.step()`'s births loop, `wander_mutation_sigma =
+1.0`) — never modified by `reinforce()`. `decide(obs, rng) -> Action |
+None` returns `None` whenever `obs.nearby` is non-empty (so the caller
+falls through to the plasticity circuit's own decision, completely
+unchanged), otherwise a movement action re-picked with probability `1 /
+persistence` each such tick and held otherwise — a bout of travel in one
+direction, not step-to-step jitter, so a blind fly actually covers
+ground. `Colony.step()`'s action resolution becomes `escape > wander >
+plasticity`: the freeze+override rule (#5/#22) is untouched, the
+reflex still always wins; `PlasticityAgent` itself required zero
+changes.
+
+**Verified live**, 5 seeds, wander on vs. off (a monkeypatched `decide()`
+always returning `None`, i.e. exactly the old always-`STAY`-when-blind
+behavior) in an identical sparse-food world (`food_spawn_rate=0.01`,
+`max_population=1` to isolate the effect from reproduction noise):
+wander never did worse than the old behavior, and in 3 of 5 seeds it
+meaningfully helped — longer survival (147 vs. 99 ticks, 169 vs. 122)
+and real additional learning (`gain_drift` 0.585 vs. 0.0, 0.871 vs.
+0.249). The two ties (both seeds dying at exactly 99 ticks either way)
+are consistent with food never entering the 8-tile sensing radius in
+time regardless of movement — a sparse-world luck limit, not a wander
+failure, and reported honestly rather than cherry-picked away.
+
+**Not touched:** `PlasticityAgent`'s internals, `EscapeAgent`, the
+freeze+override precedence, and the sensing/interaction radius split
+from #39 — this entry is purely a third, independent fallback tier
+under the existing two.
+
+Tests: `tests/test_wander.py` (new, 13 tests) — `WanderAgent` returns
+`None` with something perceived, a real movement otherwise; direction
+held across calls when the RNG never triggers a re-pick, changes when
+it always does; persistence is clamped to bounds and defaults
+correctly; a blind fly in an empty world actually moves instead of
+freezing (the core regression); escape still overrides wander even on a
+blind tick; every fly (including newborns) gets a `WanderAgent`;
+persistence inherits from the parent with mutation (`wander_mutation_
+sigma=0.0` made deterministic for the assertion); a `WanderAgent` entry
+is removed on death, mirroring escape/plasticity. 112 tests passing
+total.
