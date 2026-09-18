@@ -89,8 +89,11 @@ wired in, not two.
   structure/effect split in `decisions.md` #29), and an unsupported
   parameter in a request simply has nowhere to go in the schema, so it
   is dropped silently rather than tempting anything to widen the
-  engine. **Proposed, not yet designed or approved** — no code
-  written. Gated on one measurement first: a creatable mob's *name*
+  engine. **Designed, not implemented** (`decisions.md` #30) — no code
+  written. `create_item` and `create_mob` are deliberately asymmetric
+  there: an item's embedding drives both perception and effect, a mob's
+  drives perception only while `strength`/`type` drive its damage
+  directly. Gated on one measurement first: a creatable mob's *name*
   has to reach the encoder (otherwise every mob sharing a
   type/strength shares one vector and flies can't tell a spider from a
   wasp), but a food-sounding name on a lethal mob then perceives as

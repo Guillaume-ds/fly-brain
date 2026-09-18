@@ -145,7 +145,11 @@ yet started (see "After that" below).
   `create_tile` with real per-kind parameter schemas instead of one
   free-text action, each composing its own normalized description
   string for the encoder, and unsupported parameters dropped by having
-  nowhere to land in the schema. Proposed, not designed, not approved.
+  nowhere to land in the schema. **Designed** (`decisions.md` #30 —
+  including why `create_item` and `create_mob` are deliberately
+  asymmetric, and the two pinned signatures), not implemented; gated on
+  running `python -m world.measure_encoder --encoder nomic` somewhere
+  that can reach huggingface.co.
 - **Two-player "god vs devil" mode** — human vs computer or human vs a
   friend, one growing the colony, one destroying it, same
   instructions→world→learning loop multiplexed across two sources.

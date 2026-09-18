@@ -1407,3 +1407,200 @@ session/turn model that doesn't exist yet; whether both sides share one
 action registry or get asymmetric ones (a "devil" registry biased toward
 harm, a "god" one toward relief) is undecided. None of this blocks
 anything currently planned before the frontend.
+
+## 30. Per-kind typed creation functions: `create_item` vs `create_mob`, and why only one of them can lie
+
+**Context:** the game was restated as a pipeline — two players (human or
+AI) send instructions, instructions shape the world (items, mobs,
+environment), the world acts on the colony, the colony learns from what
+it survives (`wiki/state.md`, rewritten for this). Assessing the code
+against that statement turned up a concrete gap: of the three element
+kinds an instruction is supposed to be able to create, only **item** has
+a creation function. `env.add_item_type(description)` takes free text and
+nothing else; there is no `create_mob` (the one `Threat` type is fixed at
+`Environment.__init__`, rate-tunable only), and no tile concept at all.
+
+The proposal that prompted this: give each kind its own function with a
+real parameter schema, so `"create a venomous spider that spits fires"`
+becomes `create_mob(name='venomous spider', strength=3, type='poison')`,
+and the unimplemented part ("spits fire") is simply dropped — never
+worked around, and never a reason for anything to edit this project's
+source.
+
+**Decision: per-kind typed creation functions, with the schema itself as
+the mechanism that drops unsupported requests.** One function per
+element kind, each declaring real typed parameters rather than today's
+single free-text string. An instruction asking for something the schema
+doesn't declare has nowhere to put it — no validation branch, no
+rejection path, no fallback. The engine's vocabulary *is* the schema.
+
+This is the structure/effect split from #29 made concrete: *structure* is
+which function gets called (discrete, engine-defined, chosen by the
+translating model from a fixed list), *effect* is what the arguments and
+the embedding produce.
+
+**Decision: the two functions are deliberately asymmetric.**
+
+```
+create_item  ->  the embedding drives perception AND effect
+create_mob   ->  the embedding drives perception ONLY; effect comes from the parameters
+```
+
+**Why:** the encoder-trust gate from #28/#29, applied honestly to each
+case rather than uniformly. An item that *reads* as food and *feeds* you
+is self-consistent — if the encoder misjudges it, the result is a boring
+berry, not a trap. A mob is different: its lethality is what the
+ES-trained escape circuit was trained against, and letting the encoder
+decide that can silently invalidate the training without anything
+failing visibly. So a mob's damage comes from `strength` and `type`,
+read directly; `blend_deltas()` is never called on a mob's vector.
+
+This asymmetry also settles the naming question below, and it is why the
+`Threat`-vs-`Item` carve-out documented in `wiki/world.md` stays: a
+created mob is still not an item on the effect side, on purpose.
+
+**The naming problem, and the decision on it.** A created mob's *name*
+has to reach the encoder. Without it every mob sharing a
+`(type, strength)` would share one vector, and flies would lose the
+ability to tell a spider from a wasp — which is exactly the
+open-endedness the encoder exists to provide. But a name that reaches
+the encoder can also contradict the parameters:
+`create_mob(name='nourishing berry', strength=3, type='poison')`
+perceives as food while dealing full poison damage.
+
+Half of that is a feature, not a bug, and worth stating plainly: the
+mob still deals its full damage — `strength` is read directly, so a
+deceptive name can never make a mob *harmless*, only *unrecognizable*.
+Perceptual deception is aggressive mimicry, it is a legitimate move for
+a "devil" player, and it is **learnable**: the fly takes damage,
+`reinforce()` fires with a negative delta, and the plasticity circuit
+drops valence for that vector. The colony learns that berries lie.
+
+What is *not* acceptable is the effect on the **escape reflex**. That
+circuit is frozen for life — `danger_vector` is fixed at template build
+and ES-trained before the session starts — so unlike the plasticity
+circuit it can never learn around a convincing mimic within a
+generation. A perfect mimic doesn't just fool a fly, it switches off the
+one defense the colony cannot repair.
+
+**Decision: a mandatory mechanical clause, phrased in the Result
+registry's own vocabulary.** `create_mob` composes the embedded string
+from the player's name *plus* a clause the engine always adds, worded by
+deliberately reusing `DANGER_DESCRIPTION` and the `damage` Result's own
+reference string. Similarity to exactly those vectors is what
+`sense_danger()` and `blend_deltas()` measure, so shared vocabulary is
+the mechanism the floor relies on. The mimic becomes imperfect: the
+reflex keeps a nonzero signal, and the deception costs the devil some of
+its effect instead of being free.
+
+**The two signatures, pinned:**
+
+```
+create_item(name: str, description: str)
+    embeds: "{name}, {description}"          -- all free text, nothing composed
+    effect: blend_deltas() on that vector    -- appearance IS effect
+
+create_mob(name: str, strength: int 1..5, type: enum[poison|physical|sticky])
+    embeds: "{name}, a dangerous, fast predator dealing
+             {strength_word} {type_phrase} damage"
+    perception: that vector, via Percept + sense_danger()
+    effect:     strength + type, read directly -- never the vector
+```
+
+Items can't lie (appearance and effect are the same string). Mobs can
+(they're separate fields). That is why only `create_mob` needs the
+clause.
+
+**Worked examples**, real values from the current code (on
+`HashingItemEncoder`, see the caveat below):
+
+```
+create_item(name='rotten meat', description='rotten poisonous meat')
+  embedded : "rotten meat, rotten poisonous meat"
+  sim food -0.159  sim damage +0.343
+  -> hunger +0.00, health -34.52        both channels, from one string
+
+create_mob(name='venomous spider', strength=3, type='poison')
+  embedded : "venomous spider, a dangerous, fast predator dealing
+              moderate toxic, harmful poison damage"
+  sim danger +0.467  sim damage +0.648  sim food +0.120
+  -> damage from strength=3; blend_deltas() NOT called
+```
+
+That last line is the point of the asymmetry: if this mob's vector *did*
+go through the Result registry it would give `hunger +12.68` alongside
+`health -67.72` — the spider would partly **feed** the fly it attacks.
+That is the #28 finding reproduced exactly.
+
+**Gated on a measurement, not approved for implementation yet.** Whether
+the clause survives being swamped by the name is empirical — a sentence
+embedding is dominated by its content words. `world/measure_encoder.py`
+(`python -m world.measure_encoder --encoder nomic`) measures three
+things, because the proposal can fail in two opposite directions:
+
+1. **Floor** — deceptive mobs' similarity to `danger_vector`, expressed
+   as a fraction of an honestly-named spider's own score, since that
+   honest score is what ES actually trained against.
+2. **Confusion** — does the clause move deceptive mobs off `food` and
+   onto `damage`?
+3. **Discrimination** — do same-`(type, strength)` mobs stay
+   distinguishable? A clause heavy enough to guarantee a floor can
+   collapse every mob onto one vector, which is a worse trade than the
+   problem it solves. On the stub the registry-vocab clause already
+   pushes pairwise similarity to 0.838 mean / 0.903 max, against 0.593 /
+   0.723 for a terse phrasing — length alone costs discrimination, so
+   clause length is the real tuning dial here.
+
+The script also compares the registry-vocabulary phrasing against a
+terse one rather than assuming the former wins; if terse matches it, the
+shared-vocabulary reasoning above was wrong and the simpler phrasing
+should be used.
+
+**Caveat on every number in this entry:** they come from
+`HashingItemEncoder`, which is orthographic — it compares character
+trigrams, not meaning. The starkest illustration is that "a sweet ripe
+berry" scores `-0.117` against the `food` reference and produces
+`hunger +0.00`: on the stub, the flagship item does not feed a fly at
+all, while a spider scores `+0.120` on food. The *structure* of both
+traces above is real and testable today; the *values* are placeholders
+until `NomicItemEncoder` runs somewhere that can reach huggingface.co
+(#24).
+
+**Rejected alternatives:**
+
+- **An `appearance` enum** (`create_mob(name=..., appearance='arachnid',
+  ...)`) with `name` purely cosmetic. Closes the deception hole
+  completely, but puts perception back on a fixed discrete vocabulary —
+  precisely what the encoder-based design exists to avoid. Rejected:
+  the cure removes the feature.
+- **Keeping `name` out of the embedding entirely.** Same problem in a
+  cheaper form: every `(type, strength)` collapses to one vector.
+- **Letting a mob's lethality come from its embedding**, the way an
+  item's does. This is the uniform design, and it's what #29 assumed
+  would eventually happen. Rejected here because structured parameters
+  make it unnecessary: `strength` gives graded, authored damage without
+  asking the encoder to adjudicate anything. Worth noting this
+  *sidesteps* the #29 gate rather than waiting on it — creatable mobs no
+  longer block on the real encoder for correctness, only for quality.
+- **Validating and reporting unsupported requests** ("fire isn't
+  implemented"). Rejected as strictly worse than the schema doing it
+  silently: a validation path is a place for the engine to grow.
+
+**Still open, deliberately:** `create_tile` has no design at all — the
+structure question from #29 (is a tile an `Item` with a lingering radius,
+or a new subsystem?) is untouched. A cap on mob types, in the spirit of
+`MAX_ITEM_TYPES = 20`, is probably needed: the real exploit isn't one
+misleading name but spamming twenty semantically-distant food words so
+the colony never converges on any of them. And whether `strength` should
+be perceptible at all (section 4 of the measurement script) is upside,
+not a requirement.
+
+**Implementation cost, for when this is approved:** the director layer
+needs a signature change, not an addition. `ActionSpec` carries
+`takes_argument: bool` and `claude_controller.build_tool_definitions()`
+hardcodes every parameterized action's schema as
+`{"description": {"type": "string"}}`. Supporting per-action typed
+parameters means `ActionSpec` carrying a real schema and
+`choose_action()` returning arguments rather than
+`tuple[str, str | None]` — which touches `base.py`, both controllers, and
+`game/live_run.py`'s `apply_requests()`.
