@@ -1855,3 +1855,105 @@ create_item(name, description, strength: 1..5)
 create_tile(name, description, strength: 1..5)
 create_mob(name, effect: {heal,damage,feed,starve,trap,free}, strength: 1..5)
 ```
+
+## 33. Resource-cost system, designed: per-player energy, gating creation only
+
+**Context:** raised alongside the item/mob/tile implementation
+(`decisions.md` #30–#32's sequencing note): a resource pool bounding
+creation, so spamming it is a trade-off rather than either a hard wall
+(today's `MAX_ITEM_TYPES`-style caps) or unlimited. Designed here, not
+implemented — no code changes in this entry.
+
+**Decision: the pool is keyed by player, not by colony, and this is
+load-bearing, not a naming choice.** Energy represents *capacity to
+issue instructions* — a property of whoever's sending them (human or
+AI, `wiki/state.md`), never of the fly population those instructions
+land on. Concretely, per-colony breaks the other multiplayer mode
+already on record: **god vs devil** (`decisions.md` #29) is one shared
+colony with two players who need two separate pools — there's nowhere
+to hang a second pool on a single colony. **Multi-colony** (raised in
+this same conversation, not yet designed) is one colony per player, so
+player and colony happen to be 1:1 there — which is exactly why the two
+scopes look interchangeable in that mode and nowhere else. Keying by
+player is the one structure that works for both: a dict from player-id
+to energy, independent of how many colonies exist or what happens to
+any particular one (a colony dying and a fresh one starting shouldn't
+reset or duplicate the player's banked energy).
+
+Today there's only one instruction source, so this is a **single global
+pool for now** (`Environment.energy: float`) — but structured as the
+scalar a future `dict[player_id, float]` trivially generalizes from,
+not as something attached to `Colony`.
+
+**Decision: gates creation only, not the rate nudges.**
+`increase_/decrease_spider_rate` and `increase_/decrease_food_rate` stay
+free — they're already self-limiting (bounded `[0, 0.2]`, a fixed
+`0.02` step, fully reversible). Creation adds a standing capability to
+the world that persists until the type cap forces something out; that's
+what's worth pricing. Rate-nudging remains the always-available baseline
+tool, unconstrained by energy.
+
+**Decision: cost is a function of `(kind, strength)` only — never the
+description's derived blend potency**, even though `strength` alone
+gives a less "honest" number than pricing off what an item/tile
+actually turns out to do. Considered and rejected: pricing items/tiles
+off `blend_deltas()`'s real magnitude reopens exactly what #32 closed —
+`strength` was made the one dial that's simple, predictable, and
+decoupled from the description, which drives shape/sign only. Pricing
+off both couples two systems #32 deliberately kept apart, and makes
+cost unknowable to the translating LLM ahead of time. If flat pricing
+proves exploitable in practice, potency-weighted pricing is the fallback
+to revisit — not the v1 default.
+
+```python
+KIND_BASE_COST = {"item": 2.0, "tile": 4.0, "mob": 3.0}  # tiles cost more: persistent, re-applies every tick
+def creation_cost(kind: str, strength: int) -> float:
+    return KIND_BASE_COST[kind] * clamp_strength(strength)
+```
+
+Linear in `strength`, not convex — simplest, and there's no evidence yet
+that flat-rate max-strength spam is a real problem worth pre-solving;
+easy to swap for something superlinear later if playtesting says
+otherwise.
+
+**Decision: energy regenerates on a fixed per-tick schedule, not tied to
+colony state.** Considered and rejected: regen scaling with colony
+health/population (a thriving colony arms whoever's controlling it with
+more power) creates a feedback loop whose direction depends on which
+side a player is on — and there's no fixed god/devil alignment on
+record yet to reason about which way that should cut. Flat regen is
+fair regardless of which side a player is playing, and doesn't presume
+an alignment the game doesn't have yet.
+
+**Decision: the existing type-count caps (`MAX_ITEM_TYPES` /
+`MAX_TILE_TYPES` / `MAX_MOB_TYPES`, #27/#31) stay, as a much-higher
+backstop, not removed.** Energy becomes the limiter a player actually
+feels during play; the cap becomes a sanity/memory bound that's
+essentially never hit. Guard order in `add_item_type`/`add_tile_type`/
+`add_mob_type`: cap check first, then affordability, deduct only on
+success — a rejected request never costs anything.
+
+**Decision: `add_item_type`/`add_tile_type`/`add_mob_type` gain a `bool`
+return (created or not), instead of today's unconditional `None`.** A
+cap-rejected call and an energy-rejected call are different failures
+worth distinguishing from a schema-rejected one (nothing to say there —
+the request never named a real capability) — an energy-rejected request
+was understood perfectly and still couldn't be afforded, which
+`game/live_run.py` should be able to log distinctly (`"insufficient
+energy"` vs `"created"`). Small signature change; also the natural hook
+the preview/confirm UX (raised alongside multi-colony and this system,
+`decisions.md` #32's sequencing note) would build on later.
+
+**Open, not decided in this entry:** the resource's name (`energy` used
+throughout, following the player's own mockup wording — not
+re-litigated here); starting/max/regen constants (no strong opinion
+yet — enough for a couple of `strength=5` mobs early, not a constant
+stream — tune empirically rather than pick now); whether the
+translating LLM should ever see the current balance (kept invisible to
+the controller for v1 — the environment enforces the budget the same
+way it already enforces `effect`/`strength` validity, silently, not as
+something the model reasons about).
+
+**Not implemented.** Next real decision before building it: the exact
+starting/max/regen constants, informed by actually playing with #30–#32
+first.

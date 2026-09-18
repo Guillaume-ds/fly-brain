@@ -180,9 +180,18 @@ yet started (see "After that" below).
   colony's flies at all (nothing does today). Raised, not designed.
 - **Resource-cost system** — bound creation (item/mob/tile all share one
   `strength` field now, `decisions.md` #32, which is the hook a uniform
-  cost formula needs) behind a per-player resource pool instead of a
-  flat type-count cap, so spamming creation is a trade-off, not a wall.
-  Raised, not designed.
+  cost formula needs) behind a **per-player** energy pool instead of a
+  flat type-count cap (which stays as a much-higher backstop, not
+  removed), so spamming creation is a trade-off, not a wall. **Per
+  player, deliberately not per colony** — energy is the capacity to
+  issue instructions, an attribute of whoever's sending them, not of
+  the fly population they land on; per-colony has nowhere to put two
+  pools in "god vs devil" mode's one shared colony. **Designed**
+  (`decisions.md` #33 — cost = `(kind, strength)` only, fixed per-tick
+  regen not tied to colony state, gates creation only, the three
+  `add_*_type` methods gain a `bool` return for denial logging), not
+  implemented; today's single instruction source means one global pool
+  for now, structured to key by player once a second source exists.
 - **Preview/confirm creation UX** — before committing, show the player
   what a request actually produced (the Result-registry blend weights,
   `strength`, an eventual resource cost) and let them either refine the
