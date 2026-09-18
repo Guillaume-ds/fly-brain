@@ -64,10 +64,14 @@ position per nearby thing, nothing that says what it is.
   fields with an open-ended `Percept` list
 - next: nothing planned for `Percept`'s own shape — this is considered
   settled and foundational. Multi-colony ownership (`decisions.md` #34,
-  designed not implemented) extends *who* gets perceived — every fly
-  would perceive every other fly, friend or rival — but not *what* a
-  Percept can contain: every fly shares one fixed, generic vector, so
-  the contract below stays exactly as strict as it already is
+  revised by #35, designed not implemented) extends *who* gets
+  perceived — every fly would perceive every other fly, friend or
+  rival — but not *what* a Percept can contain: each owner gets a
+  fixed, exactly orthogonal vector (distinguishable across owners, so a
+  colony can learn per-rival valence) rather than one shared generic
+  one, but the Percept itself is still exactly `attributes, dx, dy,
+  distance` — no owner field, ever — so the contract below stays
+  exactly as strict as it already is
 
 **Logic for testing:** contract = `Observation.nearby` never contains
 anything but `Percept(attributes, dx, dy, distance)` — no field, no

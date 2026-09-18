@@ -2089,3 +2089,109 @@ here.
   still-open question, now with more surface to answer)
 
 **Not implemented.** No code changes in this entry.
+
+## 35. Distinguishable per-owner fly vectors, and a kill-transfer reward — revising #34's perception design
+
+**Context:** #34's shared generic fly vector was deliberately
+undiscriminating — every fly, any owner, looked identical, so a colony
+could never learn anything about a *specific* rival. That was fine for
+"colonies can fight or flee something fly-shaped"; it can't support
+"this colony is weak, that one is strong," which is what was actually
+wanted. Alongside that, the question of how a fly could ever learn that
+killing a rival is *good* — raised directly, with the harder version
+("learn it through the resource gain that follows") and a fallback
+("just reward the kill directly") both proposed, and a real concern
+raised about the fallback: it could make flies kill each other over
+nothing. Both are resolved here. Revises #34's perception design;
+doesn't touch #34's ownership/extinction/`target`/energy-threading
+decisions, which stand as logged.
+
+**Decision: the resource-gain-chain version of the reward is
+unworkable with the mechanism as built, confirmed by the code, not by
+assumption.** `PlasticityAgent.reinforce()` is called once per tick
+with that tick's real channel deltas, and its eligibility trace
+(`KC_TRACE_DECAY = 0.7`) decays fast enough that after ~8 ticks it's at
+`0.7^8 ≈ 0.06` — functionally gone. That trace exists to bridge a
+sense-then-consequence lag of a few ticks, not "kill a rival now,
+notice more food available over the next several dozen." No amount of
+training would fix this; the wiring genuinely can't carry a signal that
+indirect. Worth stating plainly since it's a mechanism-level limit, not
+a difficulty-level one — the same limit that already made starvation
+produce no learning signal at all (`decisions.md` #28) is in play here
+too.
+
+**Decision: the direct-kill-reward fallback's real failure mode (kill
+for its own sake) is fixed by grounding the reward in a real resource
+transfer, not by discarding the idea.** A flat kill-bonus would have
+been the first reward source in this entire system that isn't derived
+from a real physiological delta — everything today
+(`reward = max(0, ΔHUNGER)`, `punishment = max(0, -ΔHEALTH) +
+max(0, ΔSTUCK_TICKS)`, `fly_brain/plasticity.py`) comes from what
+actually happened to the fly's own body, never an injected "achievement"
+signal. An unconditional bonus breaks that invariant and has no reason
+to track whether a kill was worth anything.
+
+**The fix: when a fly dies from combat, a fraction of its own hunger
+*at the moment of death* transfers to whichever rival-owned flies
+share its cell.** This is a real `Δhunger`, on the same tick as the
+kill:
+
+- **Immediate** — inside the eligibility trace's actual bridgeable
+  horizon (a handful of ticks), unlike the resource-chain version.
+- **Grounded** — flows through the *existing* `reward = max(0, ΔHUNGER)
+  * weight` term untouched. No new `Channel`, no change to
+  `reinforce()`, nothing in `fly_brain/` at all.
+- **Self-limiting against gratuitous violence, for free.** Killing a
+  starving rival transfers almost nothing — there's nothing there to
+  take. Killing a well-fed one is genuinely worth something. The
+  incentive tracks real value instead of being flat, which is what a
+  bare bonus couldn't do.
+- **The punishment side needs no new mechanism.** Combat already deals
+  symmetric `HEALTH` damage each tick of contact (#34), which already
+  flows into the existing `punishment = max(0, -ΔHEALTH)` term. Both
+  sides already get a hurt-signal from fighting; this entry only adds
+  the winner's reward.
+
+**Real risk, flagged not solved:** this could make combat systematically
+more lucrative than foraging, on top of an already-known weakness that
+foraging barely works at all (#28, no learning signal from starvation).
+The transfer fraction needs tuning with that risk in mind once this is
+playable — not guessed at now.
+
+**Decision: each owner gets a fixed, exactly orthogonal vector — a
+standard basis vector, not a random-but-separated one.** Owner *i*
+gets `e_i` (a unit vector, all zeros except a 1 at index *i*):
+guaranteed **exact** zero cosine similarity between any two owners,
+not merely a probabilistically-small one. Deterministic, no search or
+retry logic, already unit-norm — fits the existing "everything
+downstream is plain cosine similarity" invariant with no extra work.
+Assigned in owner-registration order; exhausts at `encoder.output_dim`
+distinct owners (64 by default), nowhere near a practical concern at
+this game's scale.
+
+Two explicit revisions to #34's own reasoning:
+- #34 argued the shared vector should come from the *same encoder* as
+  everything else, to stay in one embedding space. That reasoning
+  doesn't carry over: it made sense for one shared, meaningless tag: it
+  stops applying once the vector's whole job is guaranteed separation
+  between several tags. An axis-aligned vector is a deliberate,
+  reasoned departure from "everything is encoder-derived" — the right
+  tool for a job that needs discrimination, not meaning.
+- **No jitter, unlike every other spawned entity.** Every other
+  prototype in this system (`ItemType`/`MobType`) is jittered per
+  instance (`jitter()`, `world/items.py`); an owner's identity vector
+  is fixed instead, deliberately, because jitter would blur exactly the
+  boundary this exists to keep sharp.
+
+**What this actually teaches a fly, mechanically.** `Percept.attributes`
+is the identical `e_owner` for every fly a given owner ever spawns. A
+colony's plasticity circuit doesn't need to learn "owner 2" as a
+concept — it only needs `probe(e_2)` to drift positive (worth
+engaging) or negative (worth avoiding) from lived combat outcomes
+against that exact vector, the same generalization mechanism already
+verified on items (#26). "This one is weak, this one is strong" falls
+out directly: cheap kills (large transfer relative to cost) drift a
+weak opponent's vector positive over time; costly, unproductive fights
+against a strong one drift theirs negative.
+
+**Not implemented.** No code changes in this entry.

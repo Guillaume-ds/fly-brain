@@ -175,16 +175,26 @@ yet started (see "After that" below).
 - **Multi-colony ownership** — N players, each with their own colony in
   one shared world, helping their own and degrading everyone else's; a
   real step up from "god vs devil"'s one shared colony. **Designed**
-  (`decisions.md` #34 — `Fly.owner`, per-owner extinction, a `target`
-  field on creation, player identity threaded through `director/`, and
-  fly-vs-fly combat: every fly perceives every other fly through one
-  fixed generic vector shared by all of them — the pillar
-  anonymity contract stays exactly as strict as it is today, since the
-  vector can't distinguish friend from rival — while contact between
-  different-owner flies triggers a small authored `HEALTH` delta,
-  gated by ownership alone, never by the vector), not implemented.
-  Still open: home-region geometry, whether `max_population` stays
-  shared or goes per-player, and the combat damage constant.
+  (`decisions.md` #34, perception revised by #35 — `Fly.owner`,
+  per-owner extinction, a `target` field on creation, player identity
+  threaded through `director/`, and fly-vs-fly combat: every fly
+  perceives every other fly, but through a **fixed, exactly orthogonal
+  vector per owner** (a standard basis vector, not jittered) rather
+  than one shared generic one — the pillar anonymity contract stays
+  exactly as strict as it is today (still just `attributes, dx, dy,
+  distance`, no owner field), while a colony can now actually learn
+  "this rival is weak, that one is strong" per opponent. Contact
+  between different-owner flies deals symmetric authored `HEALTH`
+  damage; a fly that dies in combat transfers a fraction of its own
+  hunger to the rival(s) that killed it, same tick — grounding "killing
+  is good" in a real, existing reward channel (`reward = max(0,
+  ΔHUNGER)`) instead of an injected bonus, and self-limiting against
+  gratuitous kills since a starving rival has nothing to transfer),
+  not implemented. Still open: home-region geometry, whether
+  `max_population` stays shared or goes per-player, the combat damage
+  constant, and the kill-transfer fraction (real risk to tune around:
+  could make combat more lucrative than foraging, on top of #28's
+  already-known foraging weakness).
 - **Resource-cost system** — bound creation (item/mob/tile all share one
   `strength` field now, `decisions.md` #32, which is the hook a uniform
   cost formula needs) behind a **per-player** energy pool instead of a
