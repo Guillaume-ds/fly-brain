@@ -36,8 +36,8 @@ model. For that, see the embodied projects linked below.
 ## Setup
 
 ```bash
-git clone https://github.com/Guillaume-ds/fly-brain
-cd fly-brain
+git clone https://github.com/Guillaume-ds/kill-the-flies
+cd kill-the-flies
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt

@@ -340,11 +340,11 @@ descriptive name for the "fly and its brain" subsystem specifically, not
 the project's overall branding, and renaming it would touch every import
 for a cosmetic reason.
 
-**Not yet done:** the GitHub repository itself is still named
-`fly-brain` — no tool available to rename it programmatically; needs a
-manual rename via GitHub Settings. The README's clone URL is left
-pointing at the current, working repo name until that happens, to avoid
-a broken link in the meantime.
+**Update:** the GitHub repository itself has been renamed to
+`kill-the-flies` (manual rename via GitHub Settings, done by the project
+owner). The README's clone URL and the local `origin` remote have been
+updated to match. The `fly_brain/` Python package name is still
+unchanged, per the rationale above.
 
 ## 18. Code-quality pass: DTOs, logging, function splits, less privacy
 
