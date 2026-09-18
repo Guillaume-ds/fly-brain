@@ -22,10 +22,11 @@ see #13 for why that was dropped.
 | Stage 1 training run (clean escape) | **unblocked and verified** — real `population_reward_std` every iteration (`decisions.md` #15); 15-iteration smoke test only, a longer real run is still future work |
 | `director/` — swappable LLM world-controller layer | done; registry → rule-based controller → `Environment` verified end to end; `ClaudeController` built to spec but **not tested live** (no API credentials in this environment) — see `decisions.md` #16 |
 | Reproduction mechanic — multi-fly `Environment`, stochastic trigger, parent cost | **done, tested** (`decisions.md` #20) |
-| `training/colony.py` — per-fly circuits/genomes (escape + plasticity), offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21, #26) — real natural birth observed in a full run, colony driven by actual trained/learning circuits end to end |
+| `game/colony.py` — per-fly circuits/genomes (escape + plasticity), offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21, #26) — real natural birth observed in a full run, colony driven by actual trained/learning circuits end to end |
 | `fly_brain/plasticity.py` — KC/MBON/DAN circuit, dopamine-gated lifetime plasticity, audit hooks | **done, tested** (`decisions.md` #26) — real learning curves verified (reward, punishment, generalization), wired into `Colony`, prior-vs-live gain split verified on reproduction |
-| No foraging behavior — flies only eat food they wander into by luck | known limitation, not a bug (`decisions.md` #21); stage 3's job |
-| Live game loop (`training/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
+| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); **partly a reward-design gap, not just a curriculum one** — starvation produces no learning signal at all (`decisions.md` #28) |
+| `tests/` — contract tests (item contract, mutation-verified) | **done** (`decisions.md` #28) |
+| Live game loop (`game/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
 | Stage 2 / stage 3 (noisy escape, forage transfer) | not started |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
@@ -41,11 +42,11 @@ see #13 for why that was dropped.
    a live test of `ClaudeController` with a real API key** (not possible
    in this environment).
 4. ~~Reproduction mechanic~~ done — see `decisions.md` #20.
-5. ~~`training/colony.py`: wire real per-fly circuits/genomes~~ done —
+5. ~~`game/colony.py`: wire real per-fly circuits/genomes~~ done —
    see `decisions.md` #21. Verified with a headless CLI run, not yet
    connected to `director/` or anything live/interactive.
 6. ~~Live game loop~~ done — see `decisions.md` #23.
-   `training/live_run.py` (`python -m training.live_run`) connects
+   `game/live_run.py` (`python -m game.live_run`) connects
    `director/`'s `WorldController` to a continuously-ticking `Colony`: a
    background thread queues player requests, the main loop drains and
    applies them each tick without pausing the world. This is what "the
@@ -77,7 +78,7 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
    MBON). Auditability hooks (`probe()`, `gain_drift()`,
    `plasticity_summary()`) built in from the start per an explicit ask;
    real learning curves verified for both reward and punishment.
-10. ~~Phase 4: `training/colony.py` integration~~ done, see
+10. ~~Phase 4: `game/colony.py` integration~~ done, see
     `decisions.md` #26. Both circuits run per fly; escape overrides
     plasticity only when `TTMn` actually spikes; offspring inherit the
     plasticity prior, never the parent's own lifetime-drifted gains
@@ -96,12 +97,21 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     `Colony`: a freshly player-created item sensed, picked up, and
     correctly triggering `reinforce()`.
 
+12. ~~Quality review before the frontend~~ done, see `decisions.md` #28.
+    Collapsed `Food` into one `Item` concept (three near-duplicates →
+    one), made `Channel` an enforced enum, split the game out of
+    `training/` into `game/`, wrote the item contract test and verified
+    it fails when the contract breaks, and documented the starvation
+    learning gap honestly rather than leaving it framed as purely a
+    curriculum issue.
+
 Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
 dedicated audit CLI/visualization on top of the hooks already in place;
 finer per-item behavior (movement, spawn-rate weighting) beyond the one
 shared default `create_item` currently gives every item — deliberately
-left simple, per #27.
+left simple, per #27; and the open question of whether hunger loss
+should carry a punishment signal (#28).
 
 The frontend is a separate, independent track, also unblocked and not
 yet started (see "After that" below).

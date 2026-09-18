@@ -1,4 +1,4 @@
-"""CLI entry point: python -m training.live_run
+"""CLI entry point: python -m game.live_run
 
 The live game loop: connects director/'s swappable WorldController to a
 continuously-ticking Colony. A background thread reads player requests
@@ -27,7 +27,7 @@ from world.env import Environment
 from world.items import HashingItemEncoder
 
 from .colony import Colony, load_starting_gains
-from .run import CHECKPOINT_DIR
+from training.run import CHECKPOINT_DIR
 
 logger = logging.getLogger(__name__)
 

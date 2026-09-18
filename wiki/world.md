@@ -8,7 +8,9 @@ one of two channels — nudging an existing rate, or describing a new
 item — and never touch a fly's internal state directly. Anything that
 counts as an item, however it was created, must resolve to a plain
 attribute vector before it can affect a fly; nothing about *what it is*
-should ever reach a fly as a name or type.
+should ever reach a fly as a name or type. `Threat` is the single
+documented exception, and it's pinned by a test so it can't widen (see
+"What is an item?" below).
 
 ---
 
@@ -79,32 +81,49 @@ consumed on contact. Its effect on a fly (heal/damage/immobilize,
 blendable) comes entirely from that vector via the Result registry —
 never assigned per item, never hardcoded by name.
 
-**Where we stand:** `Food`, `Threat` (partially — see below), and
-generic player-created `Item` all produce real, verified Result-registry
-effects; the encode → jitter → spawn pipeline and the `MAX_ITEM_TYPES`
-cap are both tested (`decisions.md` #24, #25, #27).
+There is exactly **one** item entity in the code (`decisions.md` #28).
+Food is not a separate class — it's a registered `ItemType` like any
+player-created one, spawning through the same path into the same list.
+If you can't tell food and a player-invented berry apart by reading the
+code, that's the point.
+
+**Where we stand:** built and tested. The contract below is enforced by
+a real test (`tests/test_item_contract.py`), parametrised over every
+item-producing pathway, and verified to actually fail when the contract
+is broken (`decisions.md` #24, #25, #27, #28).
 
 **What's left:**
-- done recently: the Result registry itself (#25), the generic `Item`
-  entity and `create_item` action (#27)
+- done recently: the Result registry (#25), the `create_item` action
+  (#27), and collapsing `Food` into `Item` so there's one concept
+  rather than three near-duplicates (#28)
 - next: swap in the real semantic encoder (`NomicItemEncoder`) once a
   reachable environment exists — everything today runs on the crude
   orthographic hashing stub, which is functionally correct but not
   semantically meaningful the way the real encoder would be
 
-**Logic for testing:** this is the one you named explicitly, so it's
-worth being precise about. **Contract:** anything that counts as an item
-must (a) carry a unit-norm attribute vector, (b) be perceivable by a fly
+**Logic for testing:** **Contract:** anything that counts as an item must
+(a) carry a unit-norm attribute vector, (b) be perceivable by a fly
 *only* as an anonymous `Percept` — no name, type, or id ever reaches
-`Observation`, and (c) produce its effect on a fly purely through
+`Observation` — and (c) produce its effect on a fly purely through
 Result-registry similarity, never a hardcoded per-type constant.
-**Test:** for every current item-producing pathway (`Food`, `Threat`,
-a freshly created `Item`), spawn one, place a fly adjacent to it, and
-assert all three properties hold on the resulting `Percept` and the
-resulting state delta. This test doesn't care *how* an item got made or
-what changes internally about it — only that "item-ness" survives.
-It's the one test to re-run any time item-related code changes, rather
-than re-testing every function that touches an item.
+
+**`Threat` satisfies (a) and (b) but deliberately not (c)** — it is
+perceived exactly like an item, but it moves, is never consumed, and
+kills through `determine_fly_death()` instead. That carve-out exists
+because routing lethality through encoder similarity would make a
+spider's deadliness depend on the encoder's judgment, silently changing
+what the ES-trained escape circuit was trained against. The test pins
+the carve-out precisely, so a threat can't quietly start behaving like
+an item (or vice versa) without a test failing.
+
+`tests/test_item_contract.py` implements exactly this: for every
+pathway, spawn one, put a fly on it, and assert (a)/(b)/(c) on the
+resulting `Percept` and the resulting state delta — checking the delta
+against what `blend_deltas()` says it should be, which is what actually
+rules out a hardcoded constant hiding somewhere. It doesn't care *how*
+an item got made or what changed internally; only that "item-ness"
+survives. Run it whenever item-related code changes, instead of
+re-testing every function that touches an item.
 
 ---
 
@@ -112,9 +131,9 @@ than re-testing every function that touches an item.
 
 **What it is:** anything area-based — a lava tile, a slowing zone, a
 persistent hazard. Everything today is a discrete thing you touch, not
-a place you're in. And `Threat` (spiders) sits outside the item system
-entirely: it moves and kills on contact through its own hardcoded path,
-never through the Result registry.
+a place you're in. And `Threat` still sits outside the *effect* half of
+the item system (see above) — a deliberate carve-out, but one that
+would be worth closing if threats ever need to be player-creatable.
 
 **Where we stand:** acknowledged gap, not designed.
 
@@ -122,6 +141,10 @@ never through the Result registry.
 - next: decide whether a terrain effect is a variant of `Item` (e.g. one
   with a radius that lingers instead of being consumed) or a genuinely
   new subsystem — open design question, not started
+- also open: whether `Threat` should become a real item now that there's
+  only one item class to fold it into. The blocker isn't structural any
+  more, it's that lethality-by-similarity would change what the escape
+  circuit was trained against (#28)
 
 **Logic for testing:** none yet — no contract exists until the design
 does. Once one exists, the first thing to check against it should be

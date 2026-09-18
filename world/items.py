@@ -87,18 +87,27 @@ class NomicItemEncoder(ItemEncoder):
         return np.asarray(vector, dtype=np.float64)
 
 
-@dataclass(frozen=True)
+@dataclass
 class ItemType:
-    """A registered, player- or developer-authored item type: a
-    description and its (unjittered) prototype vector, encoded once.
-    Not a grid entity itself -- see world/entities.py's `Item` for a
-    live spawned instance. `world/env.py`'s content authoring (food,
-    threats) and the player-driven item-creation system (decisions.md
-    #27) both produce these the same way.
+    """A registered item type: everything the world needs to keep
+    spawning one kind of item. Not a grid entity itself -- see
+    world/entities.py's `Item` for a live spawned instance.
+
+    Built-in content (food) and player-created types (decisions.md #27)
+    are the same thing and spawn through the same path -- `name` exists
+    only so `director/` has a handle for the built-in food rate it's
+    allowed to tune. `attributes` is the prototype, encoded once at
+    registration; spawning only jitters it.
+
+    Mutable on purpose: `spawn_rate` is exactly what director/'s
+    increase_/decrease_food_rate actions adjust.
     """
 
+    name: str
     description: str
     attributes: np.ndarray
+    spawn_rate: float
+    radius: float
 
 
 def jitter(prototype: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:
@@ -109,17 +118,6 @@ def jitter(prototype: np.ndarray, sigma: float, rng: np.random.Generator) -> np.
     """
     noise = rng.normal(0.0, sigma, size=prototype.shape)
     return _normalize(prototype + noise)
-
-
-def encode_with_jitter(
-    encoder: ItemEncoder, description: str, sigma: float, rng: np.random.Generator
-) -> np.ndarray:
-    """Encodes and jitters in one call. Prefer `jitter()` directly with an
-    already-encoded prototype when spawning many instances of the same
-    registered ItemType -- re-encoding the same description from scratch
-    on every spawn is wasteful, especially for a real (non-stub) encoder.
-    """
-    return jitter(encoder.encode(description), sigma, rng)
 
 
 def _normalize(vector: np.ndarray) -> np.ndarray:

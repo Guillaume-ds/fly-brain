@@ -6,3 +6,4 @@ requests>=2.31
 tqdm>=4.66
 anthropic>=0.40
 sentence-transformers>=3.0  # NomicItemEncoder (world/items.py) -- needs huggingface.co access, see wiki/decisions.md #24
+pytest>=8.0  # contract tests, see tests/ and wiki/world.md

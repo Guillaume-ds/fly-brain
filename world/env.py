@@ -1,6 +1,6 @@
 """Grid-world survival environment for a fly colony.
 
-Food and threats spawn continuously and threats wander (see
+Items and threats spawn continuously and threats wander (see
 wiki/decisions.md #14, #15 -- a static placement is permanently
 dodgeable). Multiple flies share one world and can reproduce (see
 wiki/decisions.md #20). A population of 1 makes reproduction
@@ -10,6 +10,13 @@ training/ uses this same class rather than a separate one.
 
 increase_/decrease_spider_rate and increase_/decrease_food_rate are
 director/'s control surface.
+
+There is exactly one item entity (decisions.md #28): food is a
+registered ItemType like any player-created one, spawning through the
+same path into the same `self.items` list. `Threat` is the deliberate
+exception -- perceived like an item, but it moves and kills through
+`determine_fly_death()` rather than the Result registry; see
+`entities.Threat` for why.
 
 A fly's observation is an anonymous list of Percepts (attribute vector +
 relative position, no name/type/id) rather than named per-type fields --
@@ -22,17 +29,19 @@ per-type constant.
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
-from .entities import Fly, Food, Item, Position, Threat
+from .entities import Fly, Item, Position, Threat
 from .items import HashingItemEncoder, ItemEncoder, ItemType, jitter
-from .results import ResultConcept, build_default_results, blend_deltas
+from .results import Channel, ResultConcept, build_default_results, blend_deltas
 
 SPAWN_RATE_BOUNDS = (0.0, 0.2)  # min/max per-tick spawn probability
 SPAWN_RATE_STEP = 0.02  # fixed nudge used by increase_*/decrease_*
 MAX_ITEM_TYPES = 20  # cap on how many distinct player-created item types can exist, see decisions.md #27
+FOOD_TYPE_NAME = "food"  # the built-in ItemType director/ is allowed to tune
+THREAT_TYPE_NAME = "threat"
 
 
 class Action(enum.IntEnum):
@@ -62,8 +71,8 @@ class Percept:
 
 @dataclass
 class Observation:
-    nearby: list[Percept] = field(default_factory=list)
-    hunger: float = 0.0  # current_hunger / max_hunger -- always known, not sensed
+    nearby: list[Percept]
+    hunger: float  # current_hunger / max_hunger -- always known, not sensed
 
 
 @dataclass
@@ -85,8 +94,6 @@ class Environment:
         spider_spawn_rate: float = 0.03,
         food_spawn_rate: float = 0.03,
         max_spiders: int = 10,
-        max_food: int = 10,
-        food_radius: float = 2.0,
         threat_radius: float = 3.0,
         threat_move_probability: float = 0.3,
         max_population: int = 20,
@@ -113,12 +120,7 @@ class Environment:
         self.max_hunger = max_hunger
         self.max_ticks = max_ticks
         self.initial_population = initial_population
-        self.spider_spawn_rate = clamp_rate(spider_spawn_rate if threats_enabled else 0.0)
-        self.food_spawn_rate = clamp_rate(food_spawn_rate if food_enabled else 0.0)
         self.max_spiders = max_spiders
-        self.max_food = max_food
-        self.food_radius = food_radius
-        self.threat_radius = threat_radius
         self.threat_move_probability = threat_move_probability
         self.max_population = max_population
         self.reproduction_hunger_threshold = reproduction_hunger_threshold
@@ -137,20 +139,52 @@ class Environment:
         self.results: list[ResultConcept] = build_default_results(
             self.encoder, max_hunger=self.max_hunger, max_health=self.max_health, max_stuck_ticks=self.max_stuck_ticks,
         )
-        # prototypes encoded once -- spawning only jitters them, never
-        # re-encodes the same fixed description from scratch every time
-        self.food_type = ItemType(food_description, self.encoder.encode(food_description))
-        self.threat_type = ItemType(threat_description, self.encoder.encode(threat_description))
+        # Every Channel a Result can move needs a bound here -- apply_result()
+        # reads this dict rather than branching per channel, so a Result on an
+        # unregistered channel raises loudly instead of being silently dropped.
+        self.channel_limits: dict[Channel, int] = {
+            Channel.HUNGER: self.max_hunger,
+            Channel.HEALTH: self.max_health,
+            Channel.STUCK_TICKS: self.max_stuck_ticks,
+        }
+
+        # Prototypes are encoded once here -- spawning only jitters them,
+        # never re-encodes the same description from scratch every tick.
+        # Food is an ordinary ItemType; it just has a name so director/
+        # can tune its rate (decisions.md #28).
+        self.food_type = ItemType(
+            name=FOOD_TYPE_NAME,
+            description=food_description,
+            attributes=self.encoder.encode(food_description),
+            spawn_rate=clamp_rate(food_spawn_rate if food_enabled else 0.0),
+            radius=item_radius,
+        )
         self.item_types: list[ItemType] = []  # player-created, see add_item_type()
+        # Threats are registered the same way, so their rate/radius live in
+        # one place like everything else -- but they spawn on their own path
+        # and are never picked up (see entities.Threat for why).
+        self.threat_type = ItemType(
+            name=THREAT_TYPE_NAME,
+            description=threat_description,
+            attributes=self.encoder.encode(threat_description),
+            spawn_rate=clamp_rate(spider_spawn_rate if threats_enabled else 0.0),
+            radius=threat_radius,
+        )
         self.rng = np.random.default_rng(seed)
 
         self.flies: list[Fly]
-        self.food: list[Food]
         self.threats: list[Threat]
         self.items: list[Item]
         self.tick: int
         self.next_fly_id: int
         self.reset()
+
+    @property
+    def spawnable_item_types(self) -> list[ItemType]:
+        """Food and every player-created type, in one list -- they spawn
+        through the same path and are the same kind of thing.
+        """
+        return [self.food_type, *self.item_types]
 
     def add_item_type(self, description: str) -> None:
         """The player-facing item-creation entry point (decisions.md
@@ -163,26 +197,33 @@ class Environment:
         """
         if len(self.item_types) >= MAX_ITEM_TYPES:
             return
-        self.item_types.append(ItemType(description, self.encoder.encode(description)))
+        self.item_types.append(
+            ItemType(
+                name=description,
+                description=description,
+                attributes=self.encoder.encode(description),
+                spawn_rate=self.item_spawn_rate,
+                radius=self.item_radius,
+            )
+        )
 
     # director-facing controls -- see wiki/decisions.md #14 for why these
     # are fixed, bounded nudges rather than taking a magnitude argument.
     def increase_spider_rate(self) -> None:
-        self.spider_spawn_rate = clamp_rate(self.spider_spawn_rate + SPAWN_RATE_STEP)
+        self.threat_type.spawn_rate = clamp_rate(self.threat_type.spawn_rate + SPAWN_RATE_STEP)
 
     def decrease_spider_rate(self) -> None:
-        self.spider_spawn_rate = clamp_rate(self.spider_spawn_rate - SPAWN_RATE_STEP)
+        self.threat_type.spawn_rate = clamp_rate(self.threat_type.spawn_rate - SPAWN_RATE_STEP)
 
     def increase_food_rate(self) -> None:
-        self.food_spawn_rate = clamp_rate(self.food_spawn_rate + SPAWN_RATE_STEP)
+        self.food_type.spawn_rate = clamp_rate(self.food_type.spawn_rate + SPAWN_RATE_STEP)
 
     def decrease_food_rate(self) -> None:
-        self.food_spawn_rate = clamp_rate(self.food_spawn_rate - SPAWN_RATE_STEP)
+        self.food_type.spawn_rate = clamp_rate(self.food_type.spawn_rate - SPAWN_RATE_STEP)
 
     def reset(self) -> dict[int, Observation]:
         self.tick = 0
         self.next_fly_id = 0
-        self.food = []
         self.threats = []
         self.items = []
         self.flies = []
@@ -206,7 +247,6 @@ class Environment:
             fly.hunger -= 1
         self.move_threats()
         self.spawn_entities()
-        self.resolve_food_pickup()
         self.resolve_item_pickup()
         births = self.resolve_reproduction()
         deaths = self.resolve_deaths()
@@ -242,7 +282,6 @@ class Environment:
 
     def occupied_cells(self) -> set[tuple[int, int]]:
         cells = {(fly.position.x, fly.position.y) for fly in self.flies}
-        cells.update((f.position.x, f.position.y) for f in self.food)
         cells.update((t.position.x, t.position.y) for t in self.threats)
         cells.update((i.position.x, i.position.y) for i in self.items)
         return cells
@@ -268,29 +307,30 @@ class Environment:
                 threat.position = self.clamp_to_grid(threat.position.x + dx, threat.position.y + dy)
 
     def spawn_entities(self) -> None:
-        if len(self.threats) < self.max_spiders and self.rng.random() < self.spider_spawn_rate:
-            attributes = jitter(self.threat_type.attributes, self.item_jitter_sigma, self.rng)
-            self.threats.append(Threat(self.random_empty_cell(self.occupied_cells()), self.threat_radius, attributes))
-        if len(self.food) < self.max_food and self.rng.random() < self.food_spawn_rate:
-            attributes = jitter(self.food_type.attributes, self.item_jitter_sigma, self.rng)
-            self.food.append(Food(self.random_empty_cell(self.occupied_cells()), self.food_radius, attributes))
-        if self.item_types and len(self.items) < self.max_items and self.rng.random() < self.item_spawn_rate:
-            item_type = self.item_types[int(self.rng.integers(0, len(self.item_types)))]
-            attributes = jitter(item_type.attributes, self.item_jitter_sigma, self.rng)
-            self.items.append(Item(self.random_empty_cell(self.occupied_cells()), self.item_radius, attributes))
+        if len(self.threats) < self.max_spiders and self.rng.random() < self.threat_type.spawn_rate:
+            self.threats.append(self.spawn_of(Threat, self.threat_type))
+        for item_type in self.spawnable_item_types:
+            if len(self.items) >= self.max_items:
+                break
+            if self.rng.random() < item_type.spawn_rate:
+                self.items.append(self.spawn_of(Item, item_type))
 
-    def resolve_food_pickup(self) -> None:
-        for fly in self.flies:
-            for food in self.food:
-                if fly.position.distance_to(food.position) <= food.pickup_radius:
-                    self.apply_result(fly, food.attributes)
-                    self.food.remove(food)
-                    break
+    def spawn_of(self, entity_class: type, item_type: ItemType):
+        """One spawn path for every registered type -- an empty cell, the
+        type's radius, and a per-instance jitter of its prototype vector.
+        `Item` and `Threat` share it because they're built identically;
+        what differs is only what the world does with them afterwards.
+        """
+        return entity_class(
+            self.random_empty_cell(self.occupied_cells()),
+            item_type.radius,
+            jitter(item_type.attributes, self.item_jitter_sigma, self.rng),
+        )
 
     def resolve_item_pickup(self) -> None:
         for fly in self.flies:
             for item in self.items:
-                if fly.position.distance_to(item.position) <= item.interaction_radius:
+                if fly.position.distance_to(item.position) <= item.radius:
                     self.apply_result(fly, item.attributes)
                     self.items.remove(item)
                     break
@@ -299,11 +339,16 @@ class Environment:
         """The real mechanical effect of an item on a fly -- a
         clipped-cosine-similarity blend across the Result registry, see
         world/results.py and decisions.md #22 part 5.
+
+        Generic over `Channel`: each channel's value names the `Fly`
+        field it writes, and `channel_limits` bounds it. A Result on a
+        channel with no registered limit raises here rather than being
+        silently dropped (decisions.md #28).
         """
-        deltas = blend_deltas(attributes, self.results)
-        fly.hunger = int(min(self.max_hunger, max(0, fly.hunger + deltas.get("hunger", 0.0))))
-        fly.health = int(min(self.max_health, max(0, fly.health + deltas.get("health", 0.0))))
-        fly.stuck_ticks = min(self.max_stuck_ticks, max(0, fly.stuck_ticks + round(deltas.get("stuck_ticks", 0.0))))
+        for channel, delta in blend_deltas(attributes, self.results).items():
+            limit = self.channel_limits[channel]
+            current = getattr(fly, channel.value)
+            setattr(fly, channel.value, int(min(limit, max(0, round(current + delta)))))
 
     def resolve_reproduction(self) -> dict[int, int]:
         """See wiki/decisions.md #20 for the formula and why it's shaped
@@ -377,19 +422,15 @@ class Environment:
         return Percept(attributes=attributes, dx=dx / norm, dy=dy / norm, distance=distance)
 
     def observe(self, fly: Fly) -> Observation:
-        nearby: list[Percept] = []
-        for food in self.food:
-            percept = self.perceive(fly.position, food.position, food.attributes, self.food_radius)
-            if percept is not None:
-                nearby.append(percept)
-        for threat in self.threats:
-            percept = self.perceive(fly.position, threat.position, threat.attributes, self.threat_radius)
-            if percept is not None:
-                nearby.append(percept)
-        for item in self.items:
-            percept = self.perceive(fly.position, item.position, item.attributes, self.item_radius)
-            if percept is not None:
-                nearby.append(percept)
+        """Items and threats are perceived identically -- each carries its
+        own radius and attribute vector, and nothing that distinguishes
+        them survives into the Percept (decisions.md #22 part 1, #28).
+        """
+        nearby = [
+            percept
+            for entity in (*self.items, *self.threats)
+            if (percept := self.perceive(fly.position, entity.position, entity.attributes, entity.radius))
+        ]
         return Observation(nearby=nearby, hunger=fly.hunger / self.max_hunger)
 
 

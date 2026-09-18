@@ -41,6 +41,7 @@ import pandas as pd
 
 from world.env import Action, Observation, Percept
 from world.items import ItemEncoder
+from world.results import Channel
 
 from .circuit import Circuit, CircuitBlueprint, SynapseEdge
 from .data import load_connectome_data
@@ -54,8 +55,13 @@ DEFAULT_K_DAN = 30  # each contributing DAN's top-K real edges into the KC/MBON 
 
 # Reward/punishment channel weights combining Δhunger/Δhealth/Δstuck_ticks
 # into one dopamine magnitude -- the "new small authored quantity" from
-# decisions.md #22 part 5, tunable, not derived from anything.
-CHANNEL_WEIGHTS = {"hunger": 1.0, "health": 3.0, "stuck_ticks": 0.5}
+# decisions.md #22 part 5, tunable, not derived from anything. Keyed by
+# the world's own Channel enum so the two sides can't drift apart.
+CHANNEL_WEIGHTS: dict[Channel, float] = {
+    Channel.HUNGER: 1.0,
+    Channel.HEALTH: 3.0,
+    Channel.STUCK_TICKS: 0.5,
+}
 
 KC_TRACE_DECAY = 0.7  # eligibility trace decay per tick, bridges sense-then-outcome delay
 LEARNING_RATE = 0.05
@@ -247,7 +253,7 @@ class PlasticityAgent:
             return Action.RIGHT if dx > 0 else Action.LEFT
         return Action.DOWN if dy > 0 else Action.UP
 
-    def reinforce(self, deltas: dict[str, float]) -> None:
+    def reinforce(self, deltas: dict[Channel, float]) -> None:
         """Call once per tick with the REAL state deltas that tick
         produced (world/results.py's blend, diffed by Colony) -- never
         from a percept's similarity score directly. That's the rule that
@@ -279,10 +285,10 @@ class PlasticityAgent:
         fraction of a group crossing threshold grows smoothly with
         magnitude instead of jumping straight to 100%.
         """
-        reward = max(0.0, deltas.get("hunger", 0.0)) * CHANNEL_WEIGHTS["hunger"]
+        reward = max(0.0, deltas.get(Channel.HUNGER, 0.0)) * CHANNEL_WEIGHTS[Channel.HUNGER]
         punishment = (
-            max(0.0, -deltas.get("health", 0.0)) * CHANNEL_WEIGHTS["health"]
-            + max(0.0, deltas.get("stuck_ticks", 0.0)) * CHANNEL_WEIGHTS["stuck_ticks"]
+            max(0.0, -deltas.get(Channel.HEALTH, 0.0)) * CHANNEL_WEIGHTS[Channel.HEALTH]
+            + max(0.0, deltas.get(Channel.STUCK_TICKS, 0.0)) * CHANNEL_WEIGHTS[Channel.STUCK_TICKS]
         )
         if reward == 0.0 and punishment == 0.0:
             return

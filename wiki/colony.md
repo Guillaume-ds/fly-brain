@@ -28,6 +28,15 @@ starvation, a threat, or damage.
   fleeing threats, never by seeking them out. Known, long-standing
   limitation, not a bug (`decisions.md` #21); caps how long any colony
   can realistically survive regardless of how well it's learned
+- **and a second, independent cause of the same thing, found during the
+  #28 review: starvation produces no learning signal at all.** Reward is
+  `max(0, Δhunger)`, so hunger *loss* is never punished — only gaining
+  hunger rewards. A fly can starve to death having learned nothing,
+  and starvation is the most common death in every run so far. That
+  means the learning rule can only reinforce behavior *after* a lucky
+  success; it cannot bootstrap search. Fixing foraging is therefore not
+  purely "stage 3's job" — it's partly a reward-design question that
+  hasn't been decided yet
 
 **Logic for testing:** contract = a fly's three state channels only ever
 move through `apply_result()`'s Result-registry blend or the fixed

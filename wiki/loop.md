@@ -17,7 +17,7 @@ blocking the other.
 the user's edits while the world keeps ticking; nothing pauses to wait
 for input.
 
-**Where we stand:** built and tested (`training/live_run.py`,
+**Where we stand:** built and tested (`game/live_run.py`,
 `decisions.md` #23) — a request queue drained each tick, ticking paced
 by `--ticks-per-second`, verified to keep advancing in real time between
 requests rather than only on input.
@@ -98,7 +98,7 @@ explicit once a score/win-screen concept exists to hang off of it.
 and the colony's whole learning history don't persist.
 
 **Where we stand:** no persistence layer exists at all. Every
-`live_run.py`/`colony_run.py` invocation calls `Environment.reset()`
+`game/live_run.py`/`game/colony_run.py` invocation calls `Environment.reset()`
 (or constructs fresh) with nothing loaded from a prior session, except
 the ES-trained escape checkpoint, which is a training artifact, not a
 live-session save.

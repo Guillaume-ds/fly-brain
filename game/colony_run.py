@@ -1,4 +1,4 @@
-"""CLI entry point: python -m training.colony_run"""
+"""CLI entry point: python -m game.colony_run"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from world.env import Environment
 from world.items import HashingItemEncoder
 
 from .colony import Colony, load_starting_gains, run_colony
-from .run import CHECKPOINT_DIR
+from training.run import CHECKPOINT_DIR
 
 logger = logging.getLogger(__name__)
 

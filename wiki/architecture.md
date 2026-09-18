@@ -1,35 +1,51 @@
 # Architecture
 
-## The pattern: Agent / Environment / Trainer
+## The pattern: Agent / Environment / Game / Trainer
 
-The project is split into three top-level packages that mirror a standard
-RL software pattern (the same shape as Gym/RLlib-style codebases):
+The project is split into five top-level packages. The first three mirror
+a standard RL software pattern (the same shape as Gym/RLlib-style
+codebases); the other two sit on top:
 
 ```
 fly_brain/     the fly and its brain (the "Agent")
-world/         the game/simulation (the "Environment")
-training/      the process that connects them and trains the brain
+world/         the simulation (the "Environment")
+game/          the colony living in the world, and the live loop you play
+training/      the offline ES process that produces a starting genome
+director/      the swappable LLM layer the player edits the world through
+tests/         contract tests (see wiki/world.md for what a contract is here)
 ```
 
-The core discipline: **`world/` never imports from `fly_brain/`, and
-`fly_brain/` never imports the world's internals** (agent.py does import
-`world.env.Action` for its return type, since the agent has to speak the
-environment's action vocabulary — but nothing in `world/` knows the brain
-exists). Only `training/` is allowed to depend on both. This means the
-environment can be tested and debugged with random actions and no brain at
-all, and the brain's circuit can be tested and debugged with synthetic
-input and no environment at all — which is exactly how both were built and
-verified before being wired together.
+`game/` and `training/` are deliberately separate (`decisions.md` #28):
+`training/` is an offline process that writes a checkpoint, `game/` is
+what you actually play. The live loop and the `Colony` belong in the
+latter — they used to live in `training/`, which made "where is the
+game?" an unnecessarily confusing question.
 
-## `world/` — the game
+The core discipline: **`world/` never imports from `fly_brain/`** — nothing
+in `world/` knows a brain exists, so the environment can be driven with
+random actions and no brain at all. The reverse direction is allowed but
+narrow: `fly_brain/` imports only the world's *boundary vocabulary* —
+`Action`, `Observation`/`Percept`, `Channel`, and `ItemEncoder`. That
+last one is a real, deliberate dependency, not an accident: a fly's
+danger reference vector has to live in the same embedding space as the
+items it's compared against, so both sides must use the same encoder.
+`game/` depends on both by design, and reads `training/`'s checkpoint
+path.
 
-- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`,
-  `Item` (each carrying an `attributes` item vector, see `items.py`
-  below; `Item` is the generic, player-created kind, `decisions.md` #27
-  — stationary, single-use, no special-cased behavior beyond what its
-  attribute vector produces through the Result registry), `Fly` (id,
-  position, hunger, `health`, `stuck_ticks`, `vulnerable_ticks_left`).
-  No behavior, just data.
+## `world/` — the simulation
+
+- **`entities.py`** — plain dataclasses: `Position`, `Item`, `Threat`,
+  `Fly`. There is exactly **one** item entity (`decisions.md` #28):
+  food is not a class, it's a registered `ItemType` like any
+  player-created one. `Item` is stationary, single-use, and has no
+  behavior beyond what its attribute vector produces through the Result
+  registry; `radius` is both how far it can be perceived and how close a
+  fly must be to pick it up — one distance, one name. `Threat` is the
+  documented exception: same shape, same anonymous perception, but it
+  moves, is never consumed, and kills through `determine_fly_death()`
+  rather than the Result registry (see its docstring for why). `Fly`
+  carries id, position, hunger, `health`, `stuck_ticks`, and
+  `vulnerable_ticks_left`. No behavior, just data.
 - **`items.py`** (`decisions.md` #22/#24/#27) — the content-authoring
   pipeline that turns a short text description into an item's small,
   fixed-dimension attribute vector: `ItemEncoder` is a swap point (same
@@ -41,40 +57,40 @@ verified before being wired together.
   zero-dependency, deterministic stub (feature hashing over character
   trigrams — orthographic, not semantic) used to test everything
   downstream without network access, and what every CLI entry point
-  actually runs today. `ItemType` is a registered description + its
-  unjittered prototype vector, encoded once; `jitter()` applies
-  per-instance Gaussian noise to an already-encoded prototype at spawn
-  time (re-normalized to unit norm) — `Environment` caches `food`/
-  `threat`/player-created prototypes once each rather than re-encoding
-  the same fixed description on every spawn. Entirely a
+  actually runs today. `ItemType` is everything the world needs to keep
+  spawning one kind of item — name, description, prototype vector
+  (encoded once), `spawn_rate`, `radius`. Food, threats, and
+  player-created types are all `ItemType`s; `name` exists only so
+  `director/` has a handle on the food rate it's allowed to tune.
+  `jitter()` applies per-instance Gaussian noise to an already-encoded
+  prototype at spawn time, re-normalized to unit norm. Entirely a
   content-authoring concern — never exposed to a fly.
-- **`results.py`** (`decisions.md` #22 part 5, #25) — the Result
-  registry: a small, fixed set of real mechanical outcomes
-  (`food`→`hunger`, `damage`→`health`, `immobilize`→`stuck_ticks`), each
-  encoded the same way items are. `blend_deltas()` is a
+- **`results.py`** (`decisions.md` #22 part 5, #25, #28) — the Result
+  registry: a small, fixed set of real mechanical outcomes, each encoded
+  the same way items are. `Channel` is a `StrEnum` whose every member's
+  value names the `Fly` field it writes (`HUNGER`→`hunger`, etc.) — that
+  link is what lets `apply_result()` stay generic instead of branching
+  per channel, and it means a Result on an unregistered channel raises
+  rather than being silently dropped. `blend_deltas()` is a
   clipped-cosine-similarity blend across every registered Result,
   applied simultaneously — the mechanism that lets one item be both
   nourishing and damaging at once. The one place in this system that's
   deliberately discrete rather than open-ended, on purpose.
 - **`env.py`** — the `Environment` class, multi-fly: `self.flies:
-  list[Fly]` share one grid, one set of spiders/food/player-created
-  items, one hunger clock each. Food and threats spawn continuously (not
-  placed once at reset) at `spider_spawn_rate`/`food_spawn_rate`, each
-  stamped with an item vector from `items.py` at spawn time, and threats
-  wander (`threat_move_probability` chance of a random step per tick) —
-  both needed for the escape circuit to have real, ongoing pressure to
-  react to rather than a one-time, permanently-dodgeable placement (see
+  list[Fly]` share one grid, one set of items and threats, one hunger
+  clock each. Every registered `ItemType` — food included — spawns
+  through the same `spawn_of()` path into the same `self.items` list at
+  its own `spawn_rate`, bounded by one shared `max_items`; threats spawn
+  the same way into their own list and wander
+  (`threat_move_probability` chance of a random step per tick), which
+  the escape circuit needs so there's real, ongoing pressure to react to
+  rather than a one-time, permanently-dodgeable placement (see
   `decisions.md` #14, #15). `add_item_type(description)` (`decisions.md`
   #27) is the player-driven item-creation entry point — registers a new
-  `ItemType`, capped at `MAX_ITEM_TYPES`; every registered type then
-  spawns as a generic, stationary, single-use `Item` at one shared
-  `item_spawn_rate`/`max_items`, sensed and picked up through the exact
-  same `perceive()`/`apply_result()` machinery as `Food` — no new
-  mechanic needed, since what an item *does* was already fully general
-  (`decisions.md` #25). Picking up food/an item doesn't just restore
-  hunger by a fixed amount — `apply_result()` runs the item's attribute
-  vector through the Result registry and applies whatever real
-  `hunger`/`health`/`stuck_ticks` deltas come out. A fly with
+  `ItemType`, capped at `MAX_ITEM_TYPES`. Picking up an item doesn't
+  restore hunger by a fixed amount — `apply_result()` runs its attribute
+  vector through the Result registry and writes whatever real deltas
+  come out, generically over `Channel` (`decisions.md` #28). A fly with
   `stuck_ticks > 0` is forced to `STAY`, same pattern as the existing
   `vulnerable_ticks_left` reproduction-cooldown mechanic. Flies
   reproduce — a world-level stochastic event, not an agent decision,
@@ -96,12 +112,12 @@ verified before being wired together.
 The `Observation` the environment exposes is an **anonymous** `nearby:
 list[Percept]` plus `hunger` (`decisions.md` #22/#25) — each `Percept`
 carries only a unit-norm attribute vector and relative position (`dx,
-dy, distance`), no name, type, or id. An entity's own radius
-(`food_radius`/`threat_radius`) still decides visibility as a
-world-internal cutoff, exactly as the old fixed radii did, but that
-stays on the world's side of the boundary; only the anonymous `Percept`
-itself crosses it. `hunger` is always visible (interoceptive, not
-sensed).
+dy, distance`), no name, type, or id. Items and threats go through the
+same `perceive()` call and are indistinguishable once they're percepts.
+Each entity's own `radius` decides visibility, a world-internal cutoff
+that stays on the world's side of the boundary. `hunger` is always
+visible (interoceptive, not sensed). This is the property
+`tests/test_item_contract.py` pins.
 
 Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
 
@@ -176,7 +192,10 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   independent of the survival-game project; still useful for poking at the
   raw connectome.
 
-## `training/` — the ES loop
+## `training/` — the offline ES loop
+
+Produces a starting genome and writes it to a checkpoint. Nothing here
+runs while you're playing.
 
 - **`curriculum.py`** — stage configs as plain `Environment` kwargs (only
   stage 1 defined so far).
@@ -185,6 +204,12 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   vector). Rewards standardized per iteration.
 - **`run.py`** — CLI (`python -m training.run --stage 1`); checkpoints to
   `training/checkpoints/` (gitignored).
+
+## `game/` — the colony and the live loop
+
+What you actually play (`decisions.md` #28). Depends on `world/`,
+`fly_brain/`, and `director/`; reads `training/`'s checkpoint path.
+
 - **`colony.py`** — `Colony` glues `Environment`'s multi-fly reproduction
   mechanic to real `fly_brain` circuits: every living fly has both an
   `EscapeAgent` and a `PlasticityAgent` (`decisions.md` #26). Each tick,
@@ -207,11 +232,11 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   or untrained (gain=1.0) otherwise; the plasticity circuit currently
   always starts untrained (gain=1.0) — no ES-style training loop exists
   yet for its prior, see roadmap.md.
-- **`colony_run.py`** — CLI (`python -m training.colony_run`) that runs a
+- **`colony_run.py`** — CLI (`python -m game.colony_run`) that runs a
   colony headlessly and logs population/births/deaths — a cheap way to
   watch it work before the real frontend exists, not the live game loop
   itself (no `director/` involved yet).
-- **`live_run.py`** — the live game loop (`python -m training.live_run`,
+- **`live_run.py`** — the live game loop (`python -m game.live_run`,
   `decisions.md` #23): a background thread reads player requests from
   stdin into a queue; the main loop ticks the `Colony` at a fixed
   real-time rate (`--ticks-per-second`) and drains/applies pending
@@ -273,7 +298,7 @@ EscapeAgent.act(Observation)      (that fly's own circuit/gains)
 exactly one fly per tick, same shape as before multi-fly support existed.
 A live colony repeats this per living fly each tick, and also runs the
 plasticity circuit alongside the escape circuit shown here — see
-`training/colony.py` above and `decisions.md` #26 for how the two
+`game/colony.py` above and `decisions.md` #26 for how the two
 combine.)
 
 ## How a player's request changes the world

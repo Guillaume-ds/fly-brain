@@ -14,16 +14,17 @@ inherited, only the capacity to learn them is.
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import numpy as np
 
 from fly_brain.agent import EscapeAgent, EscapeCircuitTemplate
 from fly_brain.plasticity import PlasticityAgent, PlasticityCircuitTemplate
+from world.entities import Fly
 from world.env import Action, ColonyStepResult, Environment
+from world.results import Channel
 
 logger = logging.getLogger(__name__)
-
-STATE_CHANNELS = ("hunger", "health", "stuck_ticks")
 
 
 class Colony:
@@ -64,11 +65,15 @@ class Colony:
     def spawn_plasticity_agent(self, prior_gains: np.ndarray | None) -> PlasticityAgent:
         return PlasticityAgent(self.plasticity_template, initial_gains=prior_gains)
 
-    def _state_of(self, fly) -> dict[str, float]:
-        return {"hunger": fly.hunger, "health": fly.health, "stuck_ticks": fly.stuck_ticks}
+    def state_of(self, fly: Fly) -> dict[Channel, int]:
+        """A fly's current value on every channel a Result can move --
+        read straight off the enum so this can't drift from the world's
+        own definition (decisions.md #28).
+        """
+        return {channel: getattr(fly, channel.value) for channel in Channel}
 
-    def snapshot_states(self) -> dict[int, dict[str, float]]:
-        return {fly.id: self._state_of(fly) for fly in self.env.flies}
+    def snapshot_states(self) -> dict[int, dict[Channel, int]]:
+        return {fly.id: self.state_of(fly) for fly in self.env.flies}
 
     def step(self) -> ColonyStepResult:
         before = self.snapshot_states()
@@ -84,7 +89,7 @@ class Colony:
         for fly in self.env.flies:
             if fly.id not in before:
                 continue  # born this tick -- no prior state to diff against yet
-            deltas = {channel: after - before[fly.id][channel] for channel, after in self._state_of(fly).items()}
+            deltas = {channel: after - before[fly.id][channel] for channel, after in self.state_of(fly).items()}
             self.plasticity_agents[fly.id].reinforce(deltas)
 
         for new_id, parent_id in result.births.items():
@@ -116,7 +121,9 @@ class Colony:
         return {"mean_gain_drift": float(np.mean(drifts)), "total_reinforcement_events": events}
 
 
-def load_starting_gains(template: EscapeCircuitTemplate, checkpoint_path=None) -> np.ndarray:
+def load_starting_gains(
+    template: EscapeCircuitTemplate, checkpoint_path: pathlib.Path | None = None
+) -> np.ndarray:
     """A trained checkpoint gives the colony a strong starting gene pool
     (see wiki/decisions.md #13 for why ES-then-reproduction, not one or
     the other); falls back to untrained (real biology, gain=1.0) if none

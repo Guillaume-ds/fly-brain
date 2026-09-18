@@ -1181,3 +1181,134 @@ controller was built to support from the start.
 rate weighting, whether it should ever move) beyond the one shared
 default is still an open question if it comes up later — deliberately
 not addressed now, per "keep it simple."
+
+## 28. Quality review before the frontend: one item concept, an enforced Channel, `game/` split out
+
+**Context:** a full review of the codebase against the wiki's own
+contracts, before starting the frontend. The question asked was whether
+the code structure matches the stated goal, whether files are clean, and
+specifically whether the intent is clear in code for *what an item is
+and how it affects a fly*. Findings below are the ones that were acted
+on; the review also confirmed several things were already fine
+(`world/` never imports `fly_brain/`, private helpers are sparse and
+justified, naming is intention-revealing, no file is oversized).
+
+**Finding: "item" was one concept in the wiki and three near-duplicates
+in code.** `Food`, `Item`, and `Threat` each had their own class, list,
+spawn branch, `observe()` loop, rate, cap, and — worst — their own name
+for the same distance (`pickup_radius` / `interaction_radius` /
+`sense_radius`). `Food` and `Item` were behaviourally *identical*:
+`resolve_food_pickup()` and `resolve_item_pickup()` were the same seven
+lines with the nouns swapped. Nothing in the code said "food is just an
+item," so the wiki asserted a unified concept the code didn't have.
+
+**Decision:** one `Item` entity, one `radius` (perception *and* pickup —
+they were always the same number), one `self.items` list, one
+`resolve_item_pickup()`, one `observe()` loop, one `spawn_of()`. Food is
+now an ordinary registered `ItemType`; it keeps a `name` only so
+`director/` has a handle on the one rate it's allowed to tune.
+`ItemType` grew `spawn_rate` and `radius` so every type carries its own
+spawn behaviour in one place, and became mutable because `spawn_rate` is
+exactly what the director's rate actions adjust. `max_food` folded into
+one shared `max_items` — total clutter bounded globally is simpler and
+no worse.
+
+**Finding: the wiki's flagship item contract failed, and was provably
+failing.** `world.md` specified a test over "`Food`, `Threat`, a freshly
+created `Item`" asserting effects come from the Result registry. Run
+against the real code, `Threat` failed that third property — it kills
+through `determine_fly_death()` and never touches `apply_result()`.
+
+**Decision:** keep the carve-out, but make it honest and *pinned*.
+Routing threat lethality through Result-registry similarity would make a
+spider's deadliness depend on the encoder's judgment — and with the
+current hashing stub, "a fast, venomous spider" scores only weakly
+against "toxic, dangerous, harmful poison," so spiders would quietly
+stop being lethal and the ES-trained escape checkpoint would no longer
+mean what it was trained to mean. Too large a behavioural change to make
+on a stub encoder. So: `Threat` satisfies (a) unit-norm attributes and
+(b) anonymous perception, explicitly *not* (c) registry-derived effect;
+that asymmetry is now documented in `entities.Threat`'s own docstring
+rather than only in the wiki, and `tests/test_item_contract.py` asserts
+it precisely so the carve-out can't silently widen in either direction.
+
+**Finding: the `Channel` contract was four duplicated string literals
+across four files with no enforcement.** `"hunger"`/`"health"`/
+`"stuck_ticks"` appeared as bare strings in `results.py`, `env.py`,
+`plasticity.py`, and `colony.py`. `results.py`'s docstring claimed the
+registry was "extensible without touching anything else" — false: a new
+channel also needed edits in `apply_result()`'s three hardcoded lines,
+`Fly`, and `CHANNEL_WEIGHTS`. A Result on an unknown channel was
+silently dropped.
+
+**Decision:** `Channel` is a `StrEnum` whose every member's value is
+exactly the `Fly` attribute it writes. `apply_result()` now iterates the
+blend generically against `Environment.channel_limits` instead of
+branching per channel, so an unregistered channel raises `KeyError`
+rather than vanishing (verified). `plasticity.CHANNEL_WEIGHTS` and
+`Colony.state_of()` key off the same enum, so the world and the brain
+can't drift apart. `Colony.state_of()` now derives from `Channel`
+directly rather than restating the field names.
+
+**Finding: the game lived in `training/`.** `Colony` — the central noun
+of the whole design — and `live_run.py`, the actual game loop, both sat
+in the package `architecture.md` described as "the ES loop." "Where is
+the game?" answered with `training/live_run.py`.
+
+**Decision:** new `game/` package holding `colony.py`, `colony_run.py`,
+and `live_run.py`. `training/` keeps only the offline ES process that
+writes a checkpoint. CLI entry points are now `python -m game.live_run`
+and `python -m game.colony_run`. Done *before* the frontend
+deliberately, since the frontend will import from wherever the game
+lives.
+
+**Finding: starvation produces no learning signal at all.** Reward is
+`max(0, Δhunger)`, so hunger *loss* is never punished — only gaining
+hunger rewards. Verified directly: a normal tick, and a fly starving to
+death, both produce `reward=0, punishment=0`. Since starvation is the
+most common death in every run recorded in this project, a fly routinely
+dies having learned nothing. This means the learning rule can only
+reinforce *after* a lucky success and cannot bootstrap search — so "no
+foraging behaviour" is not purely a training-curriculum gap as
+`decisions.md` #21 framed it; it is partly a reward-design gap.
+
+**Decision:** documented honestly in `colony.md` rather than papered
+over, and left as an open design question. Fixing it (punishing hunger
+loss, or rewarding approach-to-food) would change what the plasticity
+circuit optimises and deserves its own decision, not a quiet tweak
+during a cleanup pass.
+
+**Also fixed:** two dead symbols deleted (`encode_with_jitter`, whose own
+docstring told callers to prefer `jitter()`, and `STATE_CHANNELS`, never
+referenced); `Observation`'s pointless field defaults removed;
+`load_starting_gains`'s untyped `checkpoint_path` annotated;
+`Colony._state_of` unprivatised to match #18's convention;
+`build_default_results`'s inconsistent default dropped; `results.py`'s
+stale "fly_brain, not built yet" docstring corrected.
+
+**Doc drift corrected rather than code churned:** `architecture.md`
+claimed `fly_brain/` imports only `world.env.Action`. In reality it
+imports `Action`, `Observation`, `Percept`, `Channel`, and
+`ItemEncoder`. That dependency is *real and correct* — a fly's danger
+reference vector must live in the same embedding space as the items it's
+compared against, so both sides must use the same encoder — so the doc
+was wrong, not the code. `architecture.md` now describes the boundary as
+"the world's vocabulary" and says why. It also said "three top-level
+packages" when there were four (now five).
+
+**Verified:** `tests/test_item_contract.py` — 14 tests, parametrised
+over every item-producing pathway. Crucially, the test was checked for
+teeth by mutation: leaking a `kind` field into `Percept` fails the
+anonymity tests, hardcoding `fly.hunger = max_hunger` on pickup fails
+the registry tests, and returning un-normalised vectors from `jitter()`
+fails the unit-norm tests. A contract test that can't fail is worthless,
+so this was confirmed rather than assumed. Full regression after the
+refactor: `game.colony_run`, `game.live_run` (including `create_item`),
+and `training.run` stage 1 all re-run end to end.
+
+**Explicitly not done:** `Environment.__init__` still takes ~23
+parameters. Grouping them into config objects was considered and
+rejected for now — the flat-kwargs shape is what lets `curriculum.py`
+express a training stage as a plain dict, which is a documented choice
+(#9). Worth revisiting only if a stage ever needs to vary something the
+flat shape makes awkward.

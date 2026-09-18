@@ -19,31 +19,39 @@ class Position:
 
 
 @dataclass
-class Food:
+class Item:
+    """A live instance of a registered ItemType (world/items.py) --
+    generic, single-use, stationary. There is exactly one item entity in
+    this world: food is an ItemType like any other, not a separate class
+    (decisions.md #28). Nothing about an item's behavior is configured
+    per instance; what happens on contact comes entirely from
+    `attributes` via the Result registry (world/results.py).
+
+    `radius` is both how far away a fly can perceive it and how close a
+    fly must be to pick it up -- one distance, one name.
+    """
+
     position: Position
-    pickup_radius: float
-    attributes: np.ndarray  # this instance's item vector (prototype + jitter); see world/items.py
+    radius: float
+    attributes: np.ndarray
 
 
 @dataclass
 class Threat:
-    position: Position
-    sense_radius: float
-    attributes: np.ndarray  # this instance's item vector (prototype + jitter); see world/items.py
-
-
-@dataclass
-class Item:
-    """A live instance of a player-created ItemType (world/items.py,
-    decisions.md #27) -- generic, single-use, stationary. Unlike Food/
-    Threat there's no separate name/behavior to configure: what happens
-    on contact comes entirely from `attributes` via the Result registry
-    (world/results.py), the same mechanism that already handles a plain
-    Food item.
+    """Deliberately NOT an Item (decisions.md #28). A threat is perceived
+    exactly like one -- same anonymous Percept, same attribute vector --
+    but it moves, it is never consumed, and contact kills through
+    `Environment.determine_fly_death()` rather than through the Result
+    registry. That asymmetry is a known, deliberate carve-out, not an
+    oversight: routing lethality through Result-registry similarity
+    would make a spider's deadliness depend on the encoder's judgment,
+    which would silently change what the ES-trained escape circuit was
+    trained against. See wiki/world.md for the open question of whether
+    threats should eventually become items.
     """
 
     position: Position
-    interaction_radius: float
+    radius: float
     attributes: np.ndarray
 
 
