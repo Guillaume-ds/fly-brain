@@ -1,12 +1,11 @@
 # kill-the-flies wiki
 
-## Goal
+> **You shape the world. They learn to survive it.**
 
-The user must kill every fly in a colony. The flies live in a persistent
-environment and learn (via RL, on the real connectome) how to survive in
-it. The user doesn't act on the flies directly — they control the
-*environment* around them, through an LLM, to make survival as hard as
-possible.
+A game where the user, through an LLM, shapes an open-ended world to
+try to wipe out a fly colony that adapts to everything it encounters —
+within a life, and across generations. The user never acts on the flies
+directly — only on the world around them.
 
 This is a working wiki, not a polished writeup — it's maintained turn by
 turn as the project develops, so it stays an accurate source of truth for
@@ -15,11 +14,23 @@ day one. It's also part of the point of this project: showing how it was
 actually built with AI assistance, decision by decision, not just the
 end result.
 
-Pages:
+## The game
 
-- **[state.md](state.md)** — the standing checkpoint doc: what the game
-  *is*, right now, in plain terms. Re-read/updated whenever the core
-  loop changes.
+Start here — what the game *is*, right now, split into the three
+problems it's actually made of. Re-read and updated whenever the core
+loop changes.
+
+- **[state.md](state.md)** — the index: the catchphrase, how the three
+  files below fit together, and the description/status/todo/testing-logic
+  shape every bullet in them follows.
+- **[world.md](world.md)** — the world the user shapes.
+- **[colony.md](colony.md)** — the colony that lives in it.
+- **[loop.md](loop.md)** — the loop that connects them.
+
+## The build
+
+How the game above actually got built, and why.
+
 - **[architecture.md](architecture.md)** — how the project is structured,
   what each module does, and the interfaces between them.
 - **[stack.md](stack.md)** — what libraries/tools are used and why.
