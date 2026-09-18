@@ -784,3 +784,58 @@ at `--ticks-per-second 10` — rather than only advancing when input
 arrives). `--controller claude` reuses the existing, still
 not-live-tested `ClaudeController` (`decisions.md` #16) — no credentials
 available in this environment.
+
+## 24. #22 implementation, phase 1: `world/items.py`, swappable item encoder
+
+**Context:** starting implementation of #22. The first, self-contained
+piece is the item-encoding pipeline (description → encoder → truncation →
+jitter). Before writing it, checked whether `nomic-embed-text-v1.5`
+(chosen in #22) is actually reachable from this dev environment, the same
+diligence already applied to the connectome data and to `ClaudeController`.
+
+**Found:** `huggingface.co` is policy-blocked in this sandbox — the proxy
+status endpoint shows an explicit `403`/`"policy denial"` on
+`huggingface.co:443`. Per this session's proxy rules, blocked hosts are
+reported, not routed around. So the real encoder's weights cannot be
+fetched or exercised here, in this environment specifically — not a
+problem with the design.
+
+**Decision:** `ItemEncoder` (`world/items.py`) is an abstract swap point,
+same pattern as `director/`'s `WorldController`:
+- `NomicItemEncoder` — the real backend, `nomic-embed-text-v1.5` via
+  `sentence-transformers`, truncated to a small `output_dim` using its
+  native Matryoshka support, exactly as decided in #22.
+  **Not exercised live here** — `huggingface.co` unreachable in this
+  sandbox — the same situation `ClaudeController` is already in with no
+  API credentials (#16). Needs testing on a machine that can reach HF
+  before relying on it.
+- `HashingItemEncoder` — a zero-dependency stub (classic feature-hashing
+  over character trigrams), used to build and test everything downstream
+  without a network dependency. Explicitly **not** a semantic model —
+  similarity comes from shared substrings, not meaning — documented as
+  such in its docstring so it's never mistaken for the real thing.
+
+`encode_with_jitter()` adds per-instance Gaussian noise to a prototype
+vector and re-normalizes to unit norm, so every downstream consumer
+(Result-registry blending, KC injection) can use plain cosine similarity
+(dot product) throughout, per #22.
+
+**Verified:** ran `HashingItemEncoder` directly — deterministic (same
+description → identical vector across calls); descriptions sharing
+substrings cluster (`"a crisp red apple"` vs `"a smelly red apple"`:
+cosine 0.48) more than unrelated ones (`"a crisp red apple"` vs `"a
+smelly piece of raw meat"`: cosine −0.13); two independently jittered
+instances of the same description stay close to each other (0.85) and to
+the un-jittered prototype (0.94) rather than drifting arbitrarily; all
+vectors confirmed unit-norm after jitter.
+
+`sentence-transformers` added to `requirements.txt`, noted as needing
+`huggingface.co` access.
+
+**Status:** phase 1 of #22 done and tested (stub path only). Remaining
+phases: anonymous `Percept`/`Observation` + `Fly` health/`stuck_ticks`
+state + Result registry (world/); the KC/MBON/DAN circuit + dopamine-gated
+plasticity rule (fly_brain/); resolving how the escape circuit gets its
+stimulus without a named `threat_signal` field (open design point, not
+yet resolved — see discussion in the same session); `training/colony.py`
+integration.

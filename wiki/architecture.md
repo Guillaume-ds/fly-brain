@@ -26,6 +26,21 @@ verified before being wired together.
 - **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`,
   `Fly` (id, position, hunger, `vulnerable_ticks_left`). No behavior,
   just data.
+- **`items.py`** (new, `decisions.md` #22/#24, in progress) — the
+  content-authoring pipeline that turns a short text description into an
+  item instance's small, fixed-dimension attribute vector: `ItemEncoder`
+  is a swap point (same pattern as `director/`'s `WorldController`) —
+  `NomicItemEncoder` is the real backend (local, frozen
+  `nomic-embed-text-v1.5`, Matryoshka-truncated), **not exercised live in
+  this dev environment** (`huggingface.co` is policy-blocked here, same
+  situation as `ClaudeController` with no API credentials);
+  `HashingItemEncoder` is a zero-dependency, deterministic stub (feature
+  hashing over character trigrams — orthographic, not semantic) used to
+  test everything downstream without network access.
+  `encode_with_jitter()` adds per-instance Gaussian noise and
+  re-normalizes to unit norm, so every downstream consumer can use plain
+  cosine similarity. Entirely a content-authoring concern — never
+  exposed to a fly.
 - **`env.py`** — the `Environment` class, multi-fly: `self.flies:
   list[Fly]` share one grid, one set of spiders/food, one hunger clock
   each. Food and threats spawn continuously (not placed once at reset) at

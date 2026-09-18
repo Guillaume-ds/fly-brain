@@ -49,12 +49,27 @@ see #13 for why that was dropped.
    core Python game loop" in `decisions.md` #19's sequencing condition
    referred to — the frontend is now unblocked.
 
-All six immediate next steps above are done. What's next is a choice
-between two independent tracks, not a fixed order: implementing the
-sensing/learning redesign (`decisions.md` #22, anonymous percepts + the
-real KC/MBON/DAN plasticity circuit + encoder-based item authoring —
-design-complete, nothing built yet), or starting the frontend now that
-its blocker (this section) is cleared.
+All six immediate next steps above are done. Now implementing the
+sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
+
+7. **Phase 1: `world/items.py`, the item-encoding pipeline** — done,
+   see `decisions.md` #24. `ItemEncoder` swap point, `NomicItemEncoder`
+   (real backend, untested live — `huggingface.co` blocked in this dev
+   environment) and `HashingItemEncoder` (tested stub).
+8. Phase 2: anonymous `Percept`/`Observation`, `Fly` health/`stuck_ticks`
+   state, the Result registry (`food`/`damage`/`immobilize`) — not
+   started. Blocked on resolving one open design point: how the escape
+   circuit gets its stimulus without a named `threat_signal` field once
+   `Observation` no longer has one (proposed: reuse the same
+   reference-vector-similarity mechanism via a `danger` concept — not
+   yet confirmed).
+9. Phase 3: the KC/MBON/DAN circuit + dopamine-gated plasticity rule
+   (`fly_brain/`) — not started.
+10. Phase 4: `training/colony.py` integration (both circuits per fly,
+    prior-vs-live gain split on reproduction) — not started.
+
+The frontend is a separate, independent track, also unblocked and not
+yet started (see "After that" below).
 
 ## After that
 
