@@ -529,3 +529,121 @@ once with more generous food settings, where a real, naturally-triggered
 birth (population 3→4 at tick 127) was observed before the colony still
 eventually went extinct through a mix of starvation and a threat kill —
 a full lifecycle, driven by a real trained circuit, no artificial forcing.
+
+## 22. Sensing/learning redesign: anonymous percepts, real mushroom-body circuit, encoder-based item authoring
+
+**Context:** the current `Observation` (`food_signal/dx/dy, threat_signal/dx/dy,
+hunger`) hardcodes exactly two object types by name. The goal stated for this
+phase is AGI-like (not full AGI): a fly should discover and react to new item
+types by how they physically present, never by a hardcoded type/name, with
+valence (good/bad) learned entirely from lived experience within a single
+fly's life — not something evolution hands it pre-solved. A generalized
+`dict[str, SensorReading]` version was considered and rejected: a dict key is
+still a name, so it's the same hardcoding with different syntax.
+
+**Decision, in four parts:**
+
+1. **Perception boundary — anonymous `Percept` list.** `Observation.nearby`
+   becomes a variable-length list of `Percept(attributes: vector, dx, dy,
+   distance)` — no name, type, or id ever crosses from `world/` into what the
+   fly perceives. `world/`'s own internals (`Food`, `Threat`, a future `Web`)
+   stay typed, same as today — typing is fine on the world's side of the
+   boundary, never on the fly's.
+
+2. **A second, real, connectome-grounded circuit for lifetime learning.**
+   Kept fully separate from the frozen, ES-only escape circuit (`fly_brain`'s
+   existing `EscapeAgent`/`DNp01`/`TTMn`), combined via the same
+   freeze+override pattern as #5 (escape always wins when `TTMn` spikes).
+   Built the same way the escape circuit is (`build_circuit()`, real topology,
+   real synapse sign, trainable `synaptic_gain`), seeded from real Kenyon
+   Cell (KC) / Mushroom Body Output Neuron (MBON) / Dopaminergic Neuron (DAN)
+   types.
+
+   **Verified empirically before committing to this** (the standing
+   discipline from #14/#15 — check the real data, don't assume): the MaleCNS
+   annotations contain 4,064 real KCs (15 subtypes), 97 real MBONs (37
+   types), and 358 real DANs, which split by type into `PAM`/`PPL`/`PPM`
+   clusters — a real reward-coding/punishment-coding split already present in
+   the data, not something assigned. Real connectivity is dense: 61,210
+   `KC→MBON` synapses, 129,137 `DAN→KC` synapses. The substrate this design
+   needs actually exists and is well-connected.
+
+   Mechanism: a percept's attribute vector is injected as stimulus current
+   into the KC population via one fixed (untrained) random projection matrix
+   `W` — standing in for the real ~6-random-PN-inputs-per-KC wiring, the same
+   simplification already used for direct stimulus injection at `DNp01`.
+   Multiple simultaneous nearby percepts sum into the same population, so
+   sparse combinatorial KC coding gives any attribute combination — including
+   one never seen before — its own largely distinct activity pattern, with no
+   training or lookup table needed for that separation. This is the actual
+   discovery mechanism: novel objects get a novel-but-similarity-overlapping
+   code automatically, as a byproduct of how real KCs work.
+
+   Reinforcement ties to real outcomes already in `world/env.py` (food
+   pickup, damage/death) by injecting current into `PAM`/`PPL` DANs. A local
+   three-factor Hebbian rule (`Δsynaptic_gain(KC_i→MBON_j) = -η ·
+   dopamine_signal · kc_i_activity_trace`) updates `KC→MBON` gains per tick —
+   this is the real mushroom-body depression mechanism, and it's what makes
+   learning happen within one fly's life rather than only across generations.
+   MBON output (approach-coding spikes minus avoid-coding spikes) becomes a
+   movement bias outside the circuit, same externalized-motor-decision
+   pattern as flee-direction.
+
+3. **Evolution's role changes, doesn't disappear.** ES no longer needs to
+   evolve the answer (that's learned live); it evolves the *prior* —
+   starting `synaptic_gain` values and/or the plasticity rule's own
+   hyperparameters (learning rate, trace decay). `training/colony.py`'s
+   offspring-genome step must copy only that inherited prior, never whatever
+   gains a parent's synapses drifted to during its life — learned
+   associations aren't inherited, same as real biology; only the capacity to
+   learn them is.
+
+4. **Item authoring: local small text encoder, not hand-written vectors.**
+   Considered three options: (a) hand-write each item's attribute vector
+   directly; (b) hand-write a small vocabulary of base-category + modifier
+   vectors and compose new items additively (word2vec-style arithmetic,
+   guaranteed-linear by construction, zero training); (c) a real pretrained
+   text-embedding model, frozen (no training), encoding a short authored
+   description (`"a smelly piece of raw meat"`) into a vector.
+
+   **Chosen: (c).** Rationale given: (a) doesn't scale — full manual
+   authoring per item; (b) scales better but the linear structure is
+   artificial/engineered rather than emergent. (c) was picked specifically
+   for scalability, on the explicit understanding that "same encoder for
+   everything" gives *approximately* linear analogical structure (`king -
+   man + woman ≈ queen`), not a guaranteed algebraic property — that
+   behavior is an emergent, empirically-observed feature of embeddings
+   trained on large corpora, not something a shared encoder logically
+   guarantees. Expectation is set accordingly: item vectors will cluster and
+   compose sensibly, not exactly.
+
+   The encoder is a small **local** model (not a hosted API) — no network
+   dependency, no per-call cost, deterministic across runs, and it never
+   trains, only encodes, keeping it in the same "off-the-shelf, fully
+   inspectable tool" category as everything else in the project. Output
+   dimensionality is kept small by construction (a compact model, e.g.
+   `all-MiniLM-L6-v2`, plus one fixed PCA step down to a small final size fit
+   once on the authored item vocabulary — or a Matryoshka-style model
+   natively truncatable to a small prefix, skipping the separate PCA step).
+   Reduction is not mathematically required (the fixed KC projection `W`
+   works at any input size) — it's done because most of a general-purpose
+   encoder's dimensions are irrelevant noise for this narrow domain, because
+   it keeps the injected dimensionality in the same rough order of magnitude
+   as the real PN population KCs actually sample from, and because a small
+   vector is something a human can actually read and reason about. Exact
+   final dimensionality is an implementation detail to tune, not fixed here.
+   Per-instance jitter is still applied numerically, after encoding, exactly
+   as already designed — never by varying the text.
+
+   This authoring pipeline (description → encoder → PCA/truncation → jitter)
+   lives entirely in `world/`'s content-authoring layer. It never crosses
+   into `Observation` — the fly only ever receives the resulting numeric
+   `Percept`, never text, never a type name.
+
+**Status:** design only, empirically grounded (KC/MBON/DAN existence and
+connectivity verified against the real data above) but **nothing in this
+entry is implemented yet** — no `Percept`, no second circuit, no plasticity
+rule, no encoder pipeline. Substantial new work when built: new data
+structures in `world/`, a new circuit-builder path + plasticity loop in
+`fly_brain/`, a new local-encoder dependency, and integration changes to
+`training/colony.py`.
