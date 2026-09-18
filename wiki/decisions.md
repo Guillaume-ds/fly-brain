@@ -2463,3 +2463,83 @@ rather than a one-off); hunger-loss and health-loss punishment agree in
 kind, not magnitude (different `CHANNEL_WEIGHTS`); a positive hunger
 delta still reads as reward only, never punishment too; an empty deltas
 dict remains a no-op. 92 tests passing total.
+
+## 39. Sensing radius split from interaction radius: `WORLD_SENSING_RADIUS`
+
+**Context:** the exploration-bootstrapping gap — a fly with nothing
+perceptible nearby is completely frozen (`PlasticityAgent.
+_valence_to_action()` returns `Action.STAY` whenever `nearby` is empty;
+there is no wander/fallback movement anywhere in the codebase). First
+step agreed toward fixing it: widen how far a fly can sense food, so a
+multi-tick approach — "I smelled food at distance 5, walked toward it,
+and got rewarded" — becomes representable at all. (The wander behavior
+itself — agreed separately as an *evolved* trait, option 3 of the design
+menu discussed — is not part of this entry; this is purely the sensing
+side.)
+
+**A naive first attempt was tried and caught itself, live, before being
+kept:** `Item`/`Tile`/`Mob.radius` was being used for two different jobs
+at once — `observe()` used it as the sensing distance, and
+`resolve_item_pickup()`/`resolve_tile_effects()`/`resolve_mob_contact()`
+used the *same* field as the interaction distance. Bumping `item_radius`
+alone (2.0 → 6.0) to widen sensing therefore also widened pickup range
+to 6.0 — food got eaten instantly from 5 tiles away, with the fly never
+moving. Verified directly: a scripted "5-tick approach" produced the
+full reward on tick 0, before any movement, and a side-by-side control
+(instant contact, zero prior sensing) showed the "approach" scenario's
+`gain_drift()` at **zero** — worse than the control, because the reward
+fired before any eligibility trace had built up at all. Caught by
+running the live verification the user asked for, not assumed away.
+
+**Decision: sensing and interaction are two different distances,
+`WORLD_SENSING_RADIUS` (`world/env.py`, `= 8.0`) for the former,
+each entity's own `radius` unchanged for the latter.** `observe()` now
+passes `WORLD_SENSING_RADIUS` to `perceive()` for every item/tile/mob —
+one shared constant, not per-type, since sensing shouldn't distinguish
+what kind of thing is nearby any more than a Percept's own shape does.
+`resolve_item_pickup()`/`resolve_tile_effects()`/`resolve_mob_contact()`
+are untouched — still gated by each entity's own, much smaller `radius`
+(item=2.0, tile=2.5, mob=3.0), exactly as before. `FLY_PERCEPTION_RADIUS`
+(fly-vs-fly sensing, #34/#35) is a separate constant and was
+deliberately left alone — not part of this ask.
+
+**Verified live, corrected scenario (fly placed with real room to walk,
+after the first attempt's script itself turned out to place the fly
+next to the grid edge and the "food" off-grid — caught the same way,
+by actually running it):** a fly placed 5 tiles from food, walking
+toward it one step per tick, sensed it at distance 5/4/3 before
+`resolve_item_pickup()` fired (at distance ≤ `item.radius = 2.0`, so
+contact took 3 of the 5 steps, not all 5 — a geometry consequence of
+the interaction radius staying small, not a bug). `PlasticityAgent.
+kc_trace` was nonzero *before* the contact tick, reflecting the two
+prior ticks of sensing, and `reinforce()` fired with `gain_drift() ==
+0.230` on eventual contact — real credit assignment across the
+approach, not a single-tick snapshot.
+
+**An honest caveat found during verification, not glossed over:** a
+longer sensed approach does not automatically produce *more* learning
+than an instant, close-range contact would. The KC stimulus current is
+scaled by `1 / (1 + distance)` (`sense_and_decide()`), so a tick spent
+sensing something far away drives a much weaker current than a tick of
+direct contact — and because KCs are spiking (LIF, threshold-gated,
+`fly_brain/circuit.py`), weak sustained input doesn't necessarily
+accumulate into a bigger trace than one strong pulse does; it depends on
+exactly when spikes cross threshold, not a smooth ramp. In this entry's
+own verification, the instant-contact control actually showed *more*
+`gain_drift` (0.485) than the multi-tick approach (0.230). What's
+guaranteed by this entry is that a multi-tick approach reinforces at
+all, and reflects real accumulated sensing rather than only the final
+tick — not that it's credited *more* than any other path to the same
+reward. Whether that's the right tradeoff (versus e.g. attenuating
+distance less aggressively) is open, not decided here.
+
+Tests: `tests/test_sensing_radius.py` (new, 6 tests) — item/tile/mob are
+each sensed well beyond their own interaction radius; nothing beyond
+`WORLD_SENSING_RADIUS` is sensed at all; a few ticks of sensing-without-
+contact leave a real nonzero `kc_trace` with zero reinforcement events
+(sensing alone never reinforces); a full multi-tick approach to contact
+still reinforces on arrival. `tests/test_item_contract.py`'s
+`test_nothing_outside_its_radius_is_perceived` renamed and rewritten
+around the new sensing boundary, plus a new companion test pinning the
+split's whole point — something well outside its *interaction* radius
+is still sensed. 99 tests passing total.

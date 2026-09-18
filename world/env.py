@@ -81,6 +81,17 @@ def creation_cost(kind: str, strength: int) -> float:
 # Multi-colony ownership (decisions.md #34, #35).
 DEFAULT_OWNER = "player"  # the one implicit owner every single-player call site uses; must match entities.Fly's own default
 FLY_PERCEPTION_RADIUS = 3.0  # how far a fly can perceive another fly, own or rival -- placeholder, not tuned
+
+# Exploration-bootstrapping (decisions.md #39): sensing an item/tile/mob and
+# actually interacting with it (pickup, tile effect, mob contact) are two
+# different distances. Every entity's own `radius` still gates interaction
+# (resolve_item_pickup/resolve_tile_effects/resolve_mob_contact, unchanged),
+# but observe() now uses this one shared, much larger radius to decide what
+# shows up in Observation.nearby at all -- a fly can smell food long before
+# it's close enough to eat it. Deliberately one constant for all three kinds
+# (decision: sensing shouldn't distinguish item/tile/mob), not per-type like
+# the interaction radii are. Placeholder, not tuned by playing yet.
+WORLD_SENSING_RADIUS = 8.0
 FLY_COMBAT_DAMAGE = 5  # fixed, symmetric, authored HEALTH delta per tick of contact between different-owner flies -- placeholder, not tuned
 KILL_TRANSFER_FRACTION = 0.5  # fraction of a dying fly's own hunger transferred to the rival(s) that killed it -- placeholder, not tuned
 TARGET_SPAWN_RADIUS = 5  # how tightly "near an owner's home region" is defined when creation targets a territory -- placeholder, not tuned
@@ -841,18 +852,22 @@ class Environment:
 
     def observe(self, fly: Fly) -> Observation:
         """Items, tiles, and mobs are perceived identically -- each
-        carries its own radius and attribute vector, and nothing that
-        distinguishes them survives into the Percept (decisions.md #22
-        part 1, #28, #31). Other flies are perceived the same way
-        (decisions.md #34, #35): every owner's flies share one fixed,
-        exactly orthogonal vector, so a colony can learn per-rival
+        carries its own attribute vector, and nothing that distinguishes
+        them survives into the Percept (decisions.md #22 part 1, #28,
+        #31). They're sensed through one shared `WORLD_SENSING_RADIUS`
+        (decisions.md #39), not their own individual `radius` -- that
+        stays reserved for actual interaction (resolve_item_pickup/
+        resolve_tile_effects/resolve_mob_contact), a deliberately
+        different, much smaller distance. Other flies are perceived the
+        same way (decisions.md #34, #35): every owner's flies share one
+        fixed, exactly orthogonal vector, so a colony can learn per-rival
         valence -- but the Percept a fly receives is still exactly
         attributes/dx/dy/distance, no owner field, ever.
         """
         nearby = [
             percept
             for entity in (*self.items, *self.tiles, *self.mobs)
-            if (percept := self.perceive(fly.position, entity.position, entity.attributes, entity.radius))
+            if (percept := self.perceive(fly.position, entity.position, entity.attributes, WORLD_SENSING_RADIUS))
         ]
         nearby += [
             percept

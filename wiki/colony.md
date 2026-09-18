@@ -58,19 +58,28 @@ its description, produces a state delta that's fully explained by
 position per nearby thing, nothing that says what it is.
 
 **Where we stand:** built and tested (`decisions.md` #22 part 1, #25,
-#34, #35). Multi-colony ownership extended *who* gets perceived —
+#34, #35, #39). Multi-colony ownership extended *who* gets perceived —
 every fly now perceives every other fly, own or rival, through
 `observe()` — without touching *what* a Percept can contain: each
 owner has a fixed, exactly orthogonal vector, distinguishable across
 owners so a colony can learn per-rival valence, but the Percept itself
 is still exactly `attributes, dx, dy, distance` — no owner field, ever.
+As of #39, *how far* a fly can sense an item/tile/mob is no longer the
+same number as how close it has to get to actually interact with one —
+`WORLD_SENSING_RADIUS` governs `observe()`, each entity's own (much
+smaller) `radius` still gates the actual pickup/tile-effect/mob-contact,
+independently. A fly can now smell food long before it's close enough
+to eat it.
 
 **What's left:**
 - done recently: replacing the old fixed `food_signal`/`threat_signal`
   fields with an open-ended `Percept` list; extending perception to
-  other flies for multi-colony ownership (`decisions.md` #34, #35)
+  other flies for multi-colony ownership (`decisions.md` #34, #35);
+  splitting sensing distance from interaction distance so a fly can
+  perceive something well before it's reachable (#39)
 - next: nothing planned for `Percept`'s own shape — this is considered
-  settled and foundational
+  settled and foundational. `WORLD_SENSING_RADIUS = 8.0` is a
+  placeholder, not tuned by playing yet
 
 **Logic for testing:** contract = `Observation.nearby` never contains
 anything but `Percept(attributes, dx, dy, distance)` — no field, no
@@ -129,7 +138,17 @@ could previously net to a negative number against decay and produce
 *loss* itself is punished as of #38, symmetric with health loss — in
 practice this fires exactly and only from a `starve`-effect mob, since
 decay never reaches `effects` and items/tiles can't produce a negative
-hunger delta under the current Result vocabulary.
+hunger delta under the current Result vocabulary. As of #39, credit for
+a multi-tick approach — sensing food from a distance and walking toward
+it over several ticks before contact — was confirmed to already work
+through the existing KC eligibility trace (`kc_trace`, #22/#26): it's
+nonzero, reflecting real prior sensing, *before* the tick contact
+happens on, not reset to a blank slate each tick. Found honestly, not
+assumed either way: a longer sensed approach doesn't automatically
+out-learn an instant close-range contact, since per-tick stimulus
+strength falls off with distance and the circuit's spiking is threshold-
+gated, not a smooth ramp — what's guaranteed is that the approach is
+credited at all, not that it's credited *more*.
 
 **What's left:**
 - done recently: two real bugs found and fixed while verifying this —
@@ -138,13 +157,18 @@ hunger delta under the current Result vocabulary.
   direct-spike-readout MBON (#26); effect-attributed reward, replacing
   a whole-tick state diff that diluted weak effects with decay (#37);
   hunger-loss punishment, closing #28's last open clause — a fly that
-  gets killed by a `starve` mob now actually learns to avoid it (#38)
+  gets killed by a `starve` mob now actually learns to avoid it (#38);
+  confirmed the eligibility trace already credits a sensed multi-tick
+  approach, not just the final contact tick (#39)
 - next: decay itself remains deliberately unpunished (#38) — a colony
   that quietly starves without ever touching a `starve` mob still gets
-  no punishment signal from that decline. And punishing a known
-  hunger-loss source once burned is still not the same as giving a fly
-  a reason to actively *search* for food in the first place — that
-  exploration-bootstrapping problem is still open. A real semantic
+  no punishment signal from that decline. #39 fixed the *sensing* half
+  of exploration-bootstrapping (a fly can now smell food from a real
+  distance) but not the *movement* half — a fly with nothing sensed at
+  all still does nothing but `STAY` (`PlasticityAgent.
+  _valence_to_action()`), so it still can't get within sensing range of
+  food on its own. An evolved wander behavior — agreed in design
+  discussion, not yet implemented — is the next piece. A real semantic
   encoder (see world.md) would make *what* gets learned more meaningful
   without changing *how* learning works
 

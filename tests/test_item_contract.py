@@ -143,12 +143,32 @@ def test_mob_is_perceived_identically_to_an_item(env):
     assert set(vars(percepts[0])) == PERCEPT_FIELDS
 
 
-def test_nothing_outside_its_radius_is_perceived(env):
+def test_nothing_outside_the_sensing_radius_is_perceived(env):
+    """Sensing and interaction are two different distances (decisions.md
+    #39) -- this pins the *sensing* boundary, WORLD_SENSING_RADIUS, not
+    an entity's own (much smaller) interaction radius.
+    """
+    from world.env import WORLD_SENSING_RADIUS
+
     item = spawned(env, item_types(env)[0])
-    item.position = Position(5 + int(item.radius) + 2, 5)
+    item.position = Position(5 + int(WORLD_SENSING_RADIUS) + 2, 5)
     place(env, item)
 
     assert env.observe(env.flies[0]).nearby == []
+
+
+def test_something_well_outside_its_interaction_radius_is_still_sensed(env):
+    """The positive case the split exists for: a fly can smell food long
+    before it's close enough to eat it -- interaction radius no longer
+    doubles as the sensing distance.
+    """
+    item = spawned(env, item_types(env)[0])
+    item.position = Position(5 + int(item.radius) + 2, 5)  # well outside interaction radius
+    place(env, item)
+
+    percepts = env.observe(env.flies[0]).nearby
+
+    assert len(percepts) == 1
 
 
 # --- (c) effect comes from the Result registry -------------------------

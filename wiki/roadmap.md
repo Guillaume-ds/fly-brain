@@ -31,11 +31,11 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Reproduction mechanic — multi-fly `Environment`, stochastic trigger, parent cost | **done, tested** (`decisions.md` #20) |
 | `game/colony.py` — per-fly circuits/genomes (escape + plasticity), offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21, #26) — real natural birth observed in a full run, colony driven by actual trained/learning circuits end to end |
 | `fly_brain/plasticity.py` — KC/MBON/DAN circuit, dopamine-gated lifetime plasticity, audit hooks | **done, tested** (`decisions.md` #26) — real learning curves verified (reward, punishment, generalization), wired into `Colony`, prior-vs-live gain split verified on reproduction |
-| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); attribution fixed (#37) and hunger-loss punishment fixed (#38), but still no mechanism gives a fly a reason to actively *search* for food — the exploration-bootstrapping gap remains open |
+| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); attribution (#37), hunger-loss punishment (#38), and sensing radius (#39) all fixed, but a fly with nothing sensed still just sits — no wander/movement mechanism exists yet, so it still can't get within sensing range of food on its own |
 | `tests/` — contract tests (item contract, mutation-verified) | **done** (`decisions.md` #28) |
 | Live game loop (`game/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
 | Stage 2 (noisy escape) | **done, smoke-test trained** (`decisions.md` #36) — real fitness signal with food percepts present alongside the spider; a longer real run is still future work, same caveat as stage 1 |
-| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37) and hunger-loss punishment (#38) are both fixed now; actual foraging success is still blocked on the exploration-bootstrapping gap (nothing gives a fly a reason to search), unrelated to training |
+| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37), hunger-loss punishment (#38), and sensing radius (#39) are all fixed now; actual foraging success is still blocked on the movement half of exploration-bootstrapping (nothing yet gets a fly moving when it senses nothing), unrelated to training |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
 | Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19), not started — deliberately deferred until the core Python game loop works end to end |
@@ -235,15 +235,31 @@ yet started (see "After that" below).
   `starve` mob now shows real reinforcement (3 events, gain drift 2.69,
   probe valence shifting negative) where before this entry it learned
   nothing at all from being killed that way.
+- ~~Sensing radius split from interaction radius~~ done, see
+  `decisions.md` #39. First half of the exploration-bootstrapping fix:
+  `WORLD_SENSING_RADIUS` now governs what a fly can perceive
+  (item/tile/mob alike, one shared value), independent of each entity's
+  own much smaller interaction radius, which still gates actual pickup/
+  tile-effect/mob-contact. A naive single-radius bump was tried first
+  and caught live — it made food get eaten from 5 tiles away with no
+  approach at all — before being replaced with the real split. Verified
+  live: a fly walking 5 tiles toward sensed food builds real eligibility
+  trace across the approach (not just the contact tick) and reinforces
+  on arrival, `gain_drift() == 0.230`; honest caveat found, not glossed
+  over — a longer sensed approach doesn't automatically out-learn an
+  instant contact, since per-tick signal strength falls off with
+  distance.
 - **What's still open** — decay itself remains deliberately unpunished
   (a colony that quietly starves without ever touching a `starve` mob
-  still gets no punishment signal from that decline), and, more to the
-  point, punishing a known hunger-loss source once burned is still not
-  the same as giving a fly a reason to actively *search* for food in the
-  first place. This exploration-bootstrapping gap is what's actually
-  standing between "the freeze+override mechanism works, attribution and
-  hunger-loss punishment are both correct" (#36, #37, #38) and "the
-  colony forages well." Not designed, not started.
+  still gets no punishment signal from that decline). #39 fixed *sensing*
+  — a fly can now smell food from a real distance — but not *movement*:
+  a fly with nothing sensed at all still just sits (`Action.STAY`), so it
+  still can't get within sensing range of food on its own. An evolved
+  wander behavior is the agreed next piece (design discussed, not yet
+  implemented) — that's what's actually standing between "the
+  freeze+override mechanism works, attribution/hunger-loss
+  punishment/sensing are all correct" (#36, #37, #38, #39) and "the
+  colony forages well."
 - REINFORCE implementation, compared against ES on the same stage-1 task.
 - **Open-ended world** — replace the fixed-size grid with true open-ended,
   randomly-generated terrain, plus the spiderweb v2 mechanic (spiders drop
