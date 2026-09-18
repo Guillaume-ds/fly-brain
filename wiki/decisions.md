@@ -1957,3 +1957,135 @@ something the model reasons about).
 **Not implemented.** Next real decision before building it: the exact
 starting/max/regen constants, informed by actually playing with #30–#32
 first.
+
+## 34. Multi-colony ownership, designed: `Fly.owner`, per-owner extinction, and fly-vs-fly combat
+
+**Context:** raised earlier in this conversation — N players, each with
+their own colony in one shared world, helping their own and degrading
+everyone else's. A real step up from "god vs devil" (#29), which keeps
+one shared colony with two players who only ever disagree about it.
+Designed here, not implemented — no code changes in this entry.
+
+**Decision: `Fly.owner: PlayerId`, a plain field, inherited at birth.**
+`resolve_reproduction()` already copies a parent's state into its
+offspring; owner rides along, unchanged from the parent, same as
+everything else that isn't explicitly mutated/mutation-perturbed. No
+other entity needs an owner — items/tiles/mobs stay exactly as
+anonymous and ownerless as they are today; only which flies exist for
+which player's win condition needs tracking.
+
+**Decision: extinction becomes per-owner.**
+`ColonyStepResult.colony_extinct: bool` (today `not self.flies`, one
+flag for the whole population) generalizes to something keyed by
+owner — the game doesn't end when *any* player's flies vanish, it ends
+*for that player* when theirs do. `run_colony()`/`run_live()`'s
+stopping condition changes accordingly. Exact shape (a dict, a set of
+still-alive owners, something else) left to implementation; the
+principle — one flag per owner, not one global flag — is what's
+decided here.
+
+**Decision: everything below the perception layer stays owner-blind,
+except the one new rule this entry adds.** `resolve_item_pickup()`,
+`resolve_tile_effects()`, `resolve_mob_contact()` don't need to know or
+care whose fly they're touching — a mob a rival player parked in your
+territory still just deals `effect`/`strength` to whatever fly walks
+into it, exactly as today (`decisions.md` #30, #31). Ownership only
+ever matters for (1) the win-condition bucket a fly counts toward, (2)
+where a newly created thing prefers to spawn, and (3) the new
+fly-vs-fly combat rule below. This keeps the blast radius small: no
+change anywhere in `fly_brain/` — a fly's own circuits never know
+they're owned by anyone, ownership is `Environment`/`Colony` bookkeeping
+layered on top, nothing the brain itself is aware of.
+
+**Decision, revised from this entry's own first draft: fly-on-fly
+perception is allowed, so colonies can fight or flee each other —
+kept minimal by construction, not as a caveat bolted on after.** The
+first draft of this design recommended against it, reasoning that
+giving a fly any perceivable identity risked leaking "friend vs rival"
+as a type-like signal into `Percept` — close to violating the anonymity
+pillar contract enforced since #22 ("nothing about *what it is* should
+ever reach a fly as a name or type"). The resolution keeps that
+contract completely intact while still allowing it:
+
+- **Every fly emits one fixed, generic attribute vector, identical for
+  every fly regardless of owner** — encoded once from a plain
+  description (e.g. "a small fly"), the same way every other prototype
+  in this system is encoded, so it sits in the same embedding space as
+  items and mobs rather than being a special out-of-distribution case.
+  Not jittered per instance for v1 — individual fly identity isn't
+  something anything downstream needs yet.
+- **`observe()` walks `self.flies` (excluding self) through the exact
+  same `perceive()` call items/tiles/mobs already go through.** The
+  resulting `Percept` is still exactly `attributes, dx, dy, distance` —
+  no owner field, no name, no type, ever. A fly's own colony-mates and
+  a rival's flies are **perceptually identical** to the receiving fly;
+  the vector alone cannot tell them apart. This is what keeps the
+  pillar contract untouched, not just technically but in spirit:
+  nothing about *whose* a fly is reaches perception at all.
+- **Combat is a new resolution step, gated by ownership alone, never by
+  the vector.** On contact (same cell) between two flies with
+  *different* `owner`s, both take a small, fixed, authored `HEALTH`
+  delta — symmetric, not derived from any embedding similarity, using
+  the same `_write_channel_delta` helper `apply_result()`/
+  `resolve_mob_contact()` already share. Contact between two flies of
+  the *same* owner does nothing. This mirrors #30's reasoning for `Mob`
+  exactly, and for an even stronger reason: a fly has no description to
+  author an effect from in the first place, so there's nothing for an
+  encoder to derive it *from* even if that were wanted.
+- **Any two different owners are rivals; no alliances, no neutral
+  third parties.** Simplest possible relationship model for v1 — stated
+  explicitly so it isn't accidentally assumed to generalize further
+  than it does.
+
+**A real consequence worth stating plainly: this makes rival-avoidance
+*learned*, not reflexive, and that's the better fit, not a compromise.**
+The generic "a small fly" vector will not read as dangerous to
+`sense_danger()`'s `danger_vector` similarity check (it isn't
+semantically close to "a dangerous, fast predator") — so the frozen
+ES-trained escape reflex will not flee a rival fly on sight. Wariness of
+rival flies, if it emerges at all, has to come from the plasticity
+circuit learning it from lived experience of taking combat damage near
+fly-shaped things — exactly the same mechanism that already lets a fly
+learn a poisonous-looking item is bad (`decisions.md` #22 part 2, #26).
+No new mechanism, no `fly_brain/` changes, and it's a better thematic
+fit than a hardcoded reflex would have been: this project's whole
+premise is that a fly's behavior is either a fixed reflex, something
+learned from real consequences, or inherited structure
+(`wiki/colony.md`'s pillar contract) — reflexive rival-fleeing would
+have been the one behavior on record that didn't fit any of those
+without a special case. Learned avoidance fits the second bucket for
+free.
+
+**Decision: creation gains a `target`.** `create_item`/`create_tile`/
+`create_mob` (#30–#32) need a `target` field — "my own territory" or a
+named rival — so a spawned instance lands near the right place instead
+of today's `random_empty_cell()` picking anywhere on the shared grid.
+Deliberately deferred out of #30–#32's signatures for exactly this
+decision.
+
+**Decision: `director/` needs to know who's asking, and it currently
+doesn't at all.** `WorldController.choose_action(request, actions)`
+carries no identity today. The request queue (`game/live_run.py`) needs
+to tag each request with a player id and thread it through to whichever
+action fires — the same plumbing #33's per-player energy pool needs.
+Multi-colony is what actually forces player identity to exist; #33's
+resource system rides along on it for free once this lands.
+
+**Decision, reaffirmed from #33: energy is paid by whoever issues the
+instruction, regardless of `target`.** Falls straight out of #33's
+"energy is the issuer's capacity to act" framing — not re-litigated
+here.
+
+**Left genuinely open, not decided in this entry:**
+- home-region geometry — fixed regions per player (e.g. grid corners)
+  vs. a dynamic centroid of a player's living flies
+- population cap: one shared `max_population` (real territorial
+  contention between colonies) vs. a cap per player (cleaner, softer)
+- fly combat's fixed damage constant, and whether it should ever be
+  asymmetric (e.g. scaled by each side's own `strength`-authored gear)
+  — v1 assumption above is a flat, symmetric constant
+- exact shape of per-owner `colony_extinct`/what "the game ending"
+  means with more than one win condition in play (`wiki/loop.md`'s
+  still-open question, now with more surface to answer)
+
+**Not implemented.** No code changes in this entry.

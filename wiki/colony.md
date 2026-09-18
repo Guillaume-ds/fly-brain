@@ -62,8 +62,12 @@ position per nearby thing, nothing that says what it is.
 **What's left:**
 - done recently: replacing the old fixed `food_signal`/`threat_signal`
   fields with an open-ended `Percept` list
-- next: nothing planned — this is considered a settled, foundational
-  piece the rest of the design builds on
+- next: nothing planned for `Percept`'s own shape — this is considered
+  settled and foundational. Multi-colony ownership (`decisions.md` #34,
+  designed not implemented) extends *who* gets perceived — every fly
+  would perceive every other fly, friend or rival — but not *what* a
+  Percept can contain: every fly shares one fixed, generic vector, so
+  the contract below stays exactly as strict as it already is
 
 **Logic for testing:** contract = `Observation.nearby` never contains
 anything but `Percept(attributes, dx, dy, distance)` — no field, no

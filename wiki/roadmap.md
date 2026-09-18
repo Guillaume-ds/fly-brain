@@ -174,10 +174,17 @@ yet started (see "After that" below).
   (`decisions.md` #29).
 - **Multi-colony ownership** — N players, each with their own colony in
   one shared world, helping their own and degrading everyone else's; a
-  real step up from "god vs devil"'s one shared colony. Needs a `Fly`
-  owner, spatial scoping (creation targets a region, not the whole
-  grid), and a real decision on whether a fly can perceive a rival
-  colony's flies at all (nothing does today). Raised, not designed.
+  real step up from "god vs devil"'s one shared colony. **Designed**
+  (`decisions.md` #34 — `Fly.owner`, per-owner extinction, a `target`
+  field on creation, player identity threaded through `director/`, and
+  fly-vs-fly combat: every fly perceives every other fly through one
+  fixed generic vector shared by all of them — the pillar
+  anonymity contract stays exactly as strict as it is today, since the
+  vector can't distinguish friend from rival — while contact between
+  different-owner flies triggers a small authored `HEALTH` delta,
+  gated by ownership alone, never by the vector), not implemented.
+  Still open: home-region geometry, whether `max_population` stays
+  shared or goes per-player, and the combat damage constant.
 - **Resource-cost system** — bound creation (item/mob/tile all share one
   `strength` field now, `decisions.md` #32, which is the hook a uniform
   cost formula needs) behind a **per-player** energy pool instead of a
