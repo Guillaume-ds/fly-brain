@@ -113,6 +113,16 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   colony headlessly and logs population/births/deaths — a cheap way to
   watch it work before the real frontend exists, not the live game loop
   itself (no `director/` involved yet).
+- **`live_run.py`** — the live game loop (`python -m training.live_run`,
+  `decisions.md` #23): a background thread reads player requests from
+  stdin into a queue; the main loop ticks the `Colony` at a fixed
+  real-time rate (`--ticks-per-second`) and drains/applies pending
+  requests through `director/`'s registry each tick, so a request never
+  pauses the world. `Environment.max_ticks` is effectively unbounded here
+  — the session ends on colony extinction or the player typing `quit`,
+  not a tick cap. `apply_requests()`/`drain()` are pure, I/O-free
+  functions (testable directly); only `read_requests()`/`main()` touch
+  real stdin/threading.
 
 ## `director/` — the swappable LLM world-controller
 

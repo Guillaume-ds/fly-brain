@@ -738,3 +738,49 @@ rule, no encoder pipeline. Substantial new work when built: new data
 structures in `world/`, a new circuit-builder path + plasticity loop in
 `fly_brain/`, a new local-encoder dependency, and integration changes to
 `training/colony.py`.
+
+## 23. Live game loop: `training/live_run.py`
+
+**Context:** `director/` (the swappable `WorldController` + action
+registry) and `training/colony.py` (a real per-fly-circuit, reproducing
+colony) both existed and were independently tested, but nothing connected
+them into a continuously-running session a player could actually address
+requests to. This was the last item blocking the frontend
+(`decisions.md` #19's sequencing condition).
+
+**Decision:** a background thread reads player requests from stdin into a
+`queue.Queue`; the main thread ticks the `Colony` at a fixed real-time rate
+(`--ticks-per-second`, default 5) and, each tick, drains whatever requests
+arrived since the last tick and applies them via the existing
+`WorldController`/registry, before advancing the colony. This means typing
+a request never pauses the world — the two happen on separate threads,
+with the queue as the only handoff between them; the background thread
+never touches `Environment`/`Colony` state directly, keeping all world
+mutation on the main thread.
+
+`Environment.max_ticks` is set to an effectively unbounded value
+(`10**9`) for a live session — unlike training rollouts or the headless
+`colony_run.py` CLI, a live session isn't meant to time out; it ends only
+on colony extinction or the player typing `quit`/`exit` (or closing
+stdin).
+
+The request-handling logic is split from I/O on purpose, the same
+discipline used everywhere else in this project (e.g. `trainer.py`'s
+`rollout`/`evaluate` vs `run.py`'s CLI wrapper): `apply_requests()` and
+`drain()` are pure functions with no I/O, so they're directly testable
+without a real terminal or thread; `read_requests()` (the blocking
+`input()` loop) and `main()` are the only parts that touch actual stdin/
+threading.
+
+**Verified:** `apply_requests()`/`drain()` tested directly against a real
+`Environment` + `RuleBasedController` — confirmed a matched request
+mutates `spider_spawn_rate` and an unmatched one doesn't, confirmed queue
+draining stops at the `None` sentinel. Ran the full CLI end-to-end twice
+with piped stdin: once with all input available immediately (confirms
+requests apply correctly and `quit` stops the loop), and once with input
+staggered by real `sleep` calls (confirms the colony keeps ticking
+continuously in real time between requests — 39 ticks over ~6s wall time
+at `--ticks-per-second 10` — rather than only advancing when input
+arrives). `--controller claude` reuses the existing, still
+not-live-tested `ClaudeController` (`decisions.md` #16) — no credentials
+available in this environment.
