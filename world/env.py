@@ -61,6 +61,24 @@ MAX_MOB_TYPES = 20
 FOOD_TYPE_NAME = "food"  # the built-in ItemType director/ is allowed to tune
 SPIDER_TYPE_NAME = "spider"  # the built-in MobType -- renamed from THREAT_TYPE_NAME (decisions.md #31): it's specifically the spider now that a Mob isn't always a threat
 
+# Resource-cost system (decisions.md #33): a single global energy pool for
+# now -- there's only one instruction source today -- structured as the
+# scalar a future dict[player_id, float] trivially generalizes from once a
+# second one exists. Gates creation only; the rate nudges above are already
+# self-limiting (bounded, reversible) and stay free.
+STARTING_ENERGY = 20.0
+MAX_ENERGY = 50.0  # cap on banked energy -- spend it, don't hoard it
+ENERGY_REGEN_PER_TICK = 0.1  # fixed regen, deliberately not tied to colony state -- see decisions.md #33 for why
+KIND_BASE_COST = {"item": 2.0, "tile": 4.0, "mob": 3.0}  # tiles cost more: persistent, re-applies every tick
+
+
+def creation_cost(kind: str, strength: int) -> float:
+    """Cost is a function of (kind, strength) only, never the
+    description's derived blend potency -- see decisions.md #33 for why
+    that's a deliberate rejection, not an omission.
+    """
+    return KIND_BASE_COST[kind] * clamp_strength(strength)
+
 
 class Action(enum.IntEnum):
     STAY = 0
@@ -136,6 +154,9 @@ class Environment:
         tile_radius: float = 2.5,
         tile_spawn_rate: float = 0.01,
         max_tiles: int = 8,
+        starting_energy: float = STARTING_ENERGY,
+        max_energy: float = MAX_ENERGY,
+        energy_regen_per_tick: float = ENERGY_REGEN_PER_TICK,
         seed: int | None = None,
     ) -> None:
         self.grid_size = grid_size
@@ -163,6 +184,9 @@ class Environment:
         self.tile_radius = tile_radius
         self.tile_spawn_rate = tile_spawn_rate
         self.max_tiles = max_tiles
+        self.starting_energy = starting_energy
+        self.max_energy = max_energy
+        self.energy_regen_per_tick = energy_regen_per_tick
         self.results: list[ResultConcept] = build_default_results(
             self.encoder, max_hunger=self.max_hunger, max_health=self.max_health, max_stuck_ticks=self.max_stuck_ticks,
         )
@@ -208,6 +232,7 @@ class Environment:
         self.mobs: list[Mob]
         self.items: list[Item]
         self.tiles: list[Tile]
+        self.energy: float
         self.tick: int
         self.next_fly_id: int
         self.reset()
@@ -233,18 +258,27 @@ class Environment:
         mirrors spawnable_item_types."""
         return [self.spider_type, *self.mob_types]
 
-    def add_item_type(self, name: str, description: str, strength: int) -> None:
+    def add_item_type(self, name: str, description: str, strength: int) -> bool:
         """The player-facing item-creation entry point (decisions.md
         #27, #30, #32) -- director/'s create_item action wraps this
         directly. How flies perceive and react to the resulting item is
         determined entirely by `name`+`description`'s attribute vector,
         via the same Percept/Result-registry mechanism as food;
         `strength` scales the resulting effect's overall magnitude only,
-        never which channel moves or in which direction. Silently capped
-        at MAX_ITEM_TYPES.
+        never which channel moves or in which direction. Silently
+        capped at MAX_ITEM_TYPES, and silently rejected if it can't be
+        afforded (decisions.md #33) -- energy is only ever spent on a
+        request that also clears the cap. Returns whether it was
+        actually created, so a cap rejection, an energy rejection, and
+        success can be told apart by the caller.
         """
         if len(self.item_types) >= MAX_ITEM_TYPES:
-            return
+            return False
+        strength = clamp_strength(strength)
+        cost = creation_cost("item", strength)
+        if cost > self.energy:
+            return False
+        self.energy -= cost
         self.item_types.append(
             ItemType(
                 name=name,
@@ -252,21 +286,30 @@ class Environment:
                 attributes=self.encoder.encode(f"{name}, {description}"),
                 spawn_rate=self.item_spawn_rate,
                 radius=self.item_radius,
-                strength=clamp_strength(strength),
+                strength=strength,
             )
         )
+        return True
 
-    def add_tile_type(self, name: str, description: str, strength: int) -> None:
+    def add_tile_type(self, name: str, description: str, strength: int) -> bool:
         """The player-facing tile-creation entry point (decisions.md
         #31, #32) -- director/'s create_tile action wraps this directly.
         Identical mechanism to add_item_type -- same encoder-driven
         attributes, same Result-registry effect, same `strength` scaling
         -- the only difference is downstream, in how a spawned Tile is
         resolved (never consumed, a fraction applied every tick, see
-        resolve_tile_effects()). Silently capped at MAX_TILE_TYPES.
+        resolve_tile_effects()). Silently capped at MAX_TILE_TYPES, and
+        gated on energy the same way add_item_type is (decisions.md
+        #33) -- tiles cost more per point of strength than items do,
+        since a tile keeps paying out every tick it's stood in.
         """
         if len(self.tile_types) >= MAX_TILE_TYPES:
-            return
+            return False
+        strength = clamp_strength(strength)
+        cost = creation_cost("tile", strength)
+        if cost > self.energy:
+            return False
+        self.energy -= cost
         self.tile_types.append(
             ItemType(
                 name=name,
@@ -274,11 +317,12 @@ class Environment:
                 attributes=self.encoder.encode(f"{name}, {description}"),
                 spawn_rate=self.tile_spawn_rate,
                 radius=self.tile_radius,
-                strength=clamp_strength(strength),
+                strength=strength,
             )
         )
+        return True
 
-    def add_mob_type(self, name: str, effect: str, strength: int) -> None:
+    def add_mob_type(self, name: str, effect: str, strength: int) -> bool:
         """The player-facing mob-creation entry point (decisions.md #30-
         #32) -- director/'s create_mob action wraps this directly.
         Unlike add_item_type/add_tile_type, `effect` is authored and read
@@ -287,15 +331,22 @@ class Environment:
         with anything that could invalidate the frozen escape circuit's
         training). An `effect` outside the real vocabulary has nowhere
         to land and is silently dropped, same principle as everywhere
-        else in this pipeline. Silently capped at MAX_MOB_TYPES.
+        else in this pipeline -- checked before energy is ever touched,
+        since an invalid request was never a real one to charge for.
+        Silently capped at MAX_MOB_TYPES, and gated on energy the same
+        way as item/tile (decisions.md #33).
         """
         if len(self.mob_types) >= MAX_MOB_TYPES:
-            return
+            return False
         try:
             effect_enum = Effect(effect)
         except ValueError:
-            return
+            return False
         strength = clamp_strength(strength)
+        cost = creation_cost("mob", strength)
+        if cost > self.energy:
+            return False
+        self.energy -= cost
         description = compose_mob_description(name, effect_enum, strength)
         self.mob_types.append(
             MobType(
@@ -308,6 +359,7 @@ class Environment:
                 strength=strength,
             )
         )
+        return True
 
     # director-facing controls -- see wiki/decisions.md #14 for why these
     # are fixed, bounded nudges rather than taking a magnitude argument.
@@ -329,6 +381,7 @@ class Environment:
         self.mobs = []
         self.items = []
         self.tiles = []
+        self.energy = self.starting_energy
         self.flies = []
         for _ in range(self.initial_population):
             self.flies.append(self.spawn_fly(self.random_empty_cell(self.occupied_cells())))
@@ -348,6 +401,7 @@ class Environment:
         self.tick += 1
         for fly in self.flies:
             fly.hunger -= 1
+        self.energy = min(self.max_energy, self.energy + self.energy_regen_per_tick)
         self.move_mobs()
         self.spawn_entities()
         self.resolve_item_pickup()

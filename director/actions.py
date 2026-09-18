@@ -35,7 +35,8 @@ _STRENGTH_FIELD = {
 class ActionSpec:
     name: str
     description: str
-    fn: Callable[..., None]  # zero-arg, or called with **kwargs matching argument_schema's keys
+    fn: Callable[..., None]  # zero-arg, or called with **kwargs matching argument_schema's keys.
+    # The three create_* actions return bool (created or not, decisions.md #33); the rate nudges return None.
     argument_schema: dict[str, dict] | None = None  # {param_name: JSON-schema-property}; None means zero-argument
 
 

@@ -20,6 +20,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Player-driven item creation — generic `Item`, `create_item` director action | **done, tested** (`decisions.md` #27, #32) |
 | Player-driven *tile* creation — `Tile`, `create_tile` director action | **done, tested** (`decisions.md` #31, #32) — reuses the item mechanism, never consumed, a fraction re-applied every tick |
 | Player-driven *mob* creation — `Threat` renamed `Mob`, `create_mob` director action | **done, tested** (`decisions.md` #30–#32) — authored `effect`/`strength`, never derived from the embedding; the built-in spider is unaffected (still unconditional insta-kill) |
+| Resource-cost system — `Environment.energy`, gates all three creation actions | **done, tested** (`decisions.md` #33) — cost = `(kind, strength)` only, fixed per-tick regen, existing type caps kept as a backstop; constants are placeholders pending real playtesting |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -131,6 +132,30 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     positive-strength `free` mob rescuing an already-stuck fly, and the
     mandatory embedding clause firing only for `damage`/`starve`.
 
+14. ~~Resource-cost system~~ done, see `decisions.md` #33.
+    `Environment.energy`, a single global pool for now (structured to
+    key by player once a second instruction source exists,
+    `decisions.md` #34's sequencing note) — `STARTING_ENERGY = 20`,
+    `MAX_ENERGY = 50`, regenerating `ENERGY_REGEN_PER_TICK = 0.1` per
+    tick, unconditionally, never tied to colony state. `creation_cost(kind,
+    strength) = KIND_BASE_COST[kind] * strength` (`item: 2`, `tile: 4`,
+    `mob: 3` — tiles cost more since they keep paying out every tick).
+    `add_item_type`/`add_tile_type`/`add_mob_type` now return `bool`
+    instead of `None`, and the guard order is cap, then (mob only)
+    effect validity, then affordability, deduct only on success — a
+    rejected request, for any reason, never costs anything.
+    `game/live_run.py`'s `apply_requests()` reports a create action that
+    was understood but couldn't be afforded/fit as
+    `f"{name} (rejected)"`, distinct from `None` (nothing in the
+    registry matched at all). A new `tests/test_creation_cost.py`
+    covers the formula, spending, all three kinds' own gating, that a
+    cap or invalid-effect rejection never spends energy, and
+    regeneration/capping/reset — 27 tests, 53 total passing. Verified
+    live end to end through `apply_requests()` with a fake controller
+    exhausting a real budget, and a full headless colony run.
+    Constants above are placeholders, explicitly not tuned by playing
+    yet (`decisions.md` #33 left them open on purpose).
+
 Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
 dedicated audit CLI/visualization on top of the hooks already in place;
@@ -195,20 +220,6 @@ yet started (see "After that" below).
   constant, and the kill-transfer fraction (real risk to tune around:
   could make combat more lucrative than foraging, on top of #28's
   already-known foraging weakness).
-- **Resource-cost system** — bound creation (item/mob/tile all share one
-  `strength` field now, `decisions.md` #32, which is the hook a uniform
-  cost formula needs) behind a **per-player** energy pool instead of a
-  flat type-count cap (which stays as a much-higher backstop, not
-  removed), so spamming creation is a trade-off, not a wall. **Per
-  player, deliberately not per colony** — energy is the capacity to
-  issue instructions, an attribute of whoever's sending them, not of
-  the fly population they land on; per-colony has nowhere to put two
-  pools in "god vs devil" mode's one shared colony. **Designed**
-  (`decisions.md` #33 — cost = `(kind, strength)` only, fixed per-tick
-  regen not tied to colony state, gates creation only, the three
-  `add_*_type` methods gain a `bool` return for denial logging), not
-  implemented; today's single instruction source means one global pool
-  for now, structured to key by player once a second source exists.
 - **Preview/confirm creation UX** — before committing, show the player
   what a request actually produced (the Result-registry blend weights,
   `strength`, an eventual resource cost) and let them either refine the

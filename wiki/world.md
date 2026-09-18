@@ -98,21 +98,34 @@ swamped by the name on a *real* encoder is still unverified
 can reach huggingface.co; everything above runs on the orthographic
 stub today).
 
+Creation also costs something now: `Environment.energy`, a single
+global pool (there's only one instruction source today) that
+`creation_cost(kind, strength)` draws down and a fixed per-tick regen
+refills — never tied to colony state (`decisions.md` #33). All three
+`add_*_type` methods return whether they actually created something,
+so a type-cap rejection, an unaffordable request, and success are three
+distinguishable outcomes rather than one silent no-op; `game/live_run.py`
+logs an understood-but-rejected request as `f"{name} (rejected)"`. The
+translating LLM never sees the balance — the environment enforces it
+the same way it already enforces `effect`/`strength` validity, silently.
+
 **What's left:**
 - done recently: `create_tile` and `create_mob` (`decisions.md`
   #30–#32) — `Threat` renamed `Mob` to match, since the class stopped
   meaning "always dangerous" the moment it could be beneficial; the
   action registry's argument mechanism generalized from one free-text
-  field to a real per-action schema
+  field to a real per-action schema; the resource-cost system
+  (`decisions.md` #33) gating all three
 - next: a live test of `ClaudeController` with a real key, and the
-  `measure_encoder` run above against the real encoder
+  `measure_encoder` run above against the real encoder; the energy
+  constants (`STARTING_ENERGY`/`MAX_ENERGY`/regen rate/per-kind cost)
+  are placeholders, not tuned by actually playing yet
 - later: a second instruction source (the two-player mode, #29) —
   nothing in this surface is single-player-shaped, but nothing
-  multiplexes it either; a resource-cost system bounding creation
-  behind a per-player pool instead of a flat type-count cap (raised,
-  not designed, `wiki/roadmap.md`); a preview/confirm step showing a
-  request's derived numbers before committing (raised, not designed,
-  needs the resource-cost system and the frontend first)
+  multiplexes it either, and the energy pool is structured to key by
+  player once one exists (`decisions.md` #34); a preview/confirm step
+  showing a request's derived numbers and cost before committing
+  (raised, not designed, needs the frontend)
 
 **Logic for testing:** contract = any `WorldController`, given the same
 registry, either returns a call against a real `ActionSpec` in that

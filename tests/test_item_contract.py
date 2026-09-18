@@ -46,6 +46,7 @@ def env() -> Environment:
         food_spawn_rate=0.0,
         spider_spawn_rate=0.0,
         item_spawn_rate=0.0,
+        starting_energy=1000.0,  # not what this file is about -- see test_creation_cost.py for the energy gate itself
         seed=1,
     )
     environment.add_item_type("player item", PLAYER_ITEM_DESCRIPTION, ITEM_STRENGTH)

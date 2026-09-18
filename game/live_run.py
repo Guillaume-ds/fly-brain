@@ -77,10 +77,12 @@ def apply_requests(
     requests: list[str], controller: WorldController, actions: list[ActionSpec]
 ) -> list[tuple[str, str | None]]:
     """Pure logic, no I/O -- testable without a real stdin/thread. Returns
-    (request, action_name) per request, action_name is None if nothing
-    applied. `arguments` (decisions.md #27, #30-#32) is passed through
-    to the action's fn as **kwargs only when that action declares an
-    argument_schema.
+    (request, status) per request: the action name on success,
+    f"{name} (rejected)" if a create_* action understood the request
+    but a type cap or insufficient energy stopped it (decisions.md #33),
+    or None if nothing in the registry matched at all. `arguments`
+    (decisions.md #27, #30-#32) is passed through to the action's fn as
+    **kwargs only when that action declares an argument_schema.
     """
     by_name = {action.name: action for action in actions}
     results: list[tuple[str, str | None]] = []
@@ -91,7 +93,8 @@ def apply_requests(
         if action is None:
             action_name = None
         elif action.argument_schema is not None:
-            action.fn(**outcome[1])
+            if action.fn(**outcome[1]) is False:
+                action_name = f"{action_name} (rejected)"
         else:
             action.fn()
         results.append((request, action_name))
