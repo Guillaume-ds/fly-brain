@@ -18,8 +18,8 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | `world/env.py` — multi-fly, continuous spawn-rate params, threat movement, anonymous `Percept` observation | done, tested (`decisions.md` #14, #15, #20, #25) |
 | `world/items.py`, `world/results.py` — item-encoding pipeline + Result registry | done, tested (`decisions.md` #24, #25); real `NomicItemEncoder` untested live (`huggingface.co` blocked here) |
 | Player-driven item creation — generic `Item`, `create_item` director action | **done, tested** (`decisions.md` #27) |
-| Player-driven *mob* creation (`create_mob`) | **does not exist** — one built-in `Threat`/`Mob` type, rate-tunable only; design finished (`decisions.md` #30, #31) |
-| Player-driven *tile*/terrain creation (`create_tile`) | **does not exist** — design finished, reuses the item mechanism (`decisions.md` #31) |
+| Player-driven *mob* creation (`create_mob`) | **does not exist** — one built-in `Threat`/`Mob` type, rate-tunable only; design finished (`decisions.md` #30–#32) |
+| Player-driven *tile*/terrain creation (`create_tile`) | **does not exist** — design finished, reuses the item mechanism (`decisions.md` #31, #32) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -146,10 +146,12 @@ yet started (see "After that" below).
   free-text action, each composing its own normalized description
   string for the encoder, and unsupported parameters dropped by having
   nowhere to land in the schema. **Fully designed** (`decisions.md`
-  #30, revised by #31 — `create_tile` designed, mob valence reworked
-  to a signed `strength` on a `Channel` so mobs can be good or bad like
-  items/tiles, `Threat` renamed `Mob`), not implemented; the mob design
-  is gated on running `python -m world.measure_encoder --encoder nomic`
+  #30–#32 — `create_tile` designed, mob valence reworked to an authored
+  `effect`/`strength` pair so mobs can be good or bad like items/tiles,
+  `Threat` renamed `Mob`, and item/tile gaining a `strength` magnitude
+  dial that scales their description-derived blend uniformly without
+  ever choosing its shape or sign), not implemented; the mob design is
+  gated on running `python -m world.measure_encoder --encoder nomic`
   somewhere that can reach huggingface.co. Two follow-on ideas raised
   alongside this — multi-colony ownership per player, and a
   resource-cost system for creation actions — are deliberately not

@@ -1757,3 +1757,101 @@ range/cost is bounded, and ownership would add a `target` to every
 create_* call, but neither changes the effect mechanics this entry
 pins. Finish item/mob/tile first, as agreed; those come after as their
 own decisions.
+
+## 32. `channel` renamed `effect` (mob), a uniform `strength` magnitude added to item/tile
+
+**Context:** two questions raised while reviewing #31's signatures. (1)
+is `channel` just `effect` under a more implementation-facing name, and
+(2) shouldn't item/tile share the same `effect`+`strength` shape mobs
+just got. Answered differently — the first was a real naming bug worth
+fixing outright; the second would have deleted the actual reason items
+work the way they do, so it gets a narrower answer.
+
+**Decision 1: `create_mob`'s `channel` parameter is renamed `effect`,
+and absorbs the sign.** `channel` named *which `Fly` field gets
+written* — internal plumbing vocabulary, not what a player or a
+translating LLM is thinking in. Worse, keeping valence on signed
+`strength` (`[-5,-1] ∪ [1,5]`, #31) asked the translator to get a sign
+right with nothing to check it against — "create a healer" silently
+becomes wrong the moment `strength` comes out positive instead of
+negative, with no name attached to catch it.
+
+```
+effect ∈ {heal, damage, feed, starve, trap, free}
+strength: int in [1, 5]   -- plain positive magnitude, no sign anywhere
+```
+
+`heal`/`damage` → `HEALTH`; `feed`/`starve` → `HUNGER`; `trap`/`free` →
+`STUCK_TICKS` — recovers #31's "a positive-strength mob can free an
+already-stuck fly" case for free, just reachable by naming it directly
+(`effect='free'`) instead of inferring it from a sign.
+
+This also simplifies #31's mandatory-clause rule from a sign
+computation to a lookup: **force the clause when `effect` is `damage`
+or `starve`** (harmful and capable of killing); skip it for `trap`
+(harmful but never lethal) and for `heal`/`feed`/`free` (beneficial) —
+identical outcomes to #31's rule, cleaner to state and to implement.
+
+**Decision 2: item/tile do NOT get an authored `effect` field — the
+emergent, description-derived blend is unchanged.** Full parity was
+considered and rejected, for reasons already on record rather than new
+ones:
+
+- it would delete the Minecraft case (#22's poisonous meat healing
+  *and* damaging from one description, discovered by the encoder,
+  never declared) — an `effect` enum forces one channel, reintroducing
+  exactly the per-item authoring burden the encoder exists to remove
+- it would contradict the actual reason the real encoder was chosen
+  in the first place (this project's very first item-authoring
+  decision): same encoder for everything only gives the
+  `king - man + woman = queen`-style generalization property if effect
+  is *derived*, never declared per item
+- it would break the item contract as tested
+  (`tests/test_item_contract.py`): effect must be "fully explained by
+  `blend_deltas()` on its own attribute vector" — an authored `effect`
+  field is precisely the hardcoded-by-name constant that contract
+  exists to forbid
+
+None of that reasoning applies to mobs, and the difference is why the
+asymmetry is deliberate rather than an oversight carried over
+unexamined: mob effect is authored because the encoder can't be
+trusted with anything that invalidates the frozen escape circuit's
+training (#30); items/tiles carry no such risk — a misjudged blend
+gives an oddly-shaped item, never a training-invalidating one.
+
+**What item/tile do gain: a uniform `strength` that scales magnitude
+only, never shape or sign.**
+
+```
+create_item(name: str, description: str, strength: int in [1, 5])
+    embeds: "{name}, {description}"
+    effect: blend_deltas(vector) * magnitude(strength)
+            -- shape (which channels move) and sign (heal vs harm) stay
+               100% from the description; strength only sets overall
+               potency
+
+create_tile(name: str, description: str, strength: int in [1, 5])
+    same, applied per tick, persistent
+```
+
+"Rotten poisonous meat, strength 5" still heals *and* damages from the
+description alone — both deltas scale up together, proportionally.
+`strength` never selects a channel or a sign here, so the pillar
+contract's actual wording ("nothing about *what it is*... as a name or
+type") is untouched; the item contract test gains "scaled by
+`strength`" to its check, not a new failure mode.
+
+**Consequence, noted for when the resource-cost system (raised
+alongside multi-colony ownership, #31's sequencing note, neither
+designed yet) gets designed:** all three creation functions now share
+one `strength` field, which is exactly the single hook a uniform
+creation-cost formula needs — one place to price creation across item,
+tile, and mob, rather than three different shapes to reconcile later.
+
+**Signatures, final:**
+
+```
+create_item(name, description, strength: 1..5)
+create_tile(name, description, strength: 1..5)
+create_mob(name, effect: {heal,damage,feed,starve,trap,free}, strength: 1..5)
+```

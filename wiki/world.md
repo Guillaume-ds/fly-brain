@@ -90,12 +90,15 @@ wired in, not two.
   parameter in a request simply has nowhere to go in the schema, so it
   is dropped silently rather than tempting anything to widen the
   engine. **Designed, not implemented** (`decisions.md` #30, revised
-  by #31) — no code written. All three kinds now share the same good/
-  bad axis: an item's and a tile's embedding drives both perception and
-  effect (a tile is a lingering, re-applied variant of the same item
-  mechanism); a mob's embedding drives perception only, while a signed
-  `strength` on a `Channel` drives its effect directly — `Threat` is
-  renamed `Mob` to match (#31). Gated on one measurement first: a creatable mob's *name*
+  by #31 and #32) — no code written. All three kinds now share the same
+  good/bad axis, and all three share one `strength` field: an item's
+  and a tile's embedding drives both perception and the *shape* of its
+  effect, with `strength` only scaling that effect's magnitude (a tile
+  is a lingering, re-applied variant of the same item mechanism); a
+  mob's embedding drives perception only, while an authored `effect`
+  (`heal`/`damage`/`feed`/`starve`/`trap`/`free`) and `strength` drive
+  its effect directly — `Threat` is renamed `Mob` to match (#31).
+  Gated on one measurement first: a creatable mob's *name*
   has to reach the encoder (otherwise every mob sharing a
   type/strength shares one vector and flies can't tell a spider from a
   wasp), but a food-sounding name on a lethal mob then perceives as
@@ -195,21 +198,21 @@ more spiders; a player cannot ask for a *different* spider.
 slowing zone, no persistent hazard. Everything today is a discrete
 thing you touch, not a place you're in.
 
-**Where we stand:** design finished for both (`decisions.md` #30, #31),
-implementation not started.
+**Where we stand:** design finished for both (`decisions.md` #30, #31,
+#32), implementation not started.
 
 **What's left:**
 - next: build the per-kind typed creation functions themselves (see
   "How do instructions reach the world?" above) — `create_tile` reuses
   the existing item mechanism almost entirely (same perception, same
-  Result-registry effect, only persistent instead of consumed);
-  `create_mob` needs `Threat` renamed `Mob`, a signed `strength`
-  parameter, and graded per-tick contact damage replacing today's
-  unconditional insta-kill for anything player-created (the built-in
-  spider is unaffected)
+  Result-registry effect shape, only persistent instead of consumed,
+  with `strength` scaling magnitude only); `create_mob` needs `Threat`
+  renamed `Mob`, an `effect`/`strength` pair, and graded per-tick
+  contact damage replacing today's unconditional insta-kill for
+  anything player-created (the built-in spider is unaffected)
 - the mob blocker from #29 ("one gate, not two" — a spider's lethality
   can't safely be encoder-derived under the stub encoder, #28) no
-  longer applies the way it did: `strength`/`channel` are authored
+  longer applies the way it did: `effect`/`strength` are authored
   parameters, read directly, never through the Result registry, so a
   created mob's effect doesn't depend on the encoder's judgment at all
   any more. What the encoder *does* still decide is perception — can a
