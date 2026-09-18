@@ -589,6 +589,24 @@ still a name, so it's the same hardcoding with different syntax.
    movement bias outside the circuit, same externalized-motor-decision
    pattern as flee-direction.
 
+   **What `dopamine_signal` concretely is:** not an abstract number injected
+   directly into the update rule — the real spiking output of the real DAN
+   population, same discipline as everything else here. Reinforcement events
+   inject stimulus current into `PAM`/`PPL` DANs exactly the way
+   `threat_signal` is injected into `DNp01` in the escape circuit; those DAN
+   neurons then spike or don't through the same LIF dynamics as every other
+   neuron in the circuit, and `dopamine_signal` is that real spiking
+   activity — never a hardcoded ±1. The reward-vs-punishment sign falls out
+   of which real DAN type actually fired (`PAM` = reward-coding, `PPL1` =
+   punishment-coding in the literature, and this split is the real one found
+   in the data, not assigned by us). Because a fly senses an object slightly
+   before it learns the outcome (approach, then eat), the dopamine spike
+   generally arrives a few ticks after the KCs that represented that
+   object's attributes fired — `kc_i_activity_trace` is a short decaying
+   eligibility trace of recent KC activity that exists specifically to let a
+   slightly-delayed dopamine signal still tag the right KCs, rather than
+   requiring exact same-tick coincidence.
+
 3. **Evolution's role changes, doesn't disappear.** ES no longer needs to
    evolve the answer (that's learned live); it evolves the *prior* —
    starting `synaptic_gain` values and/or the plasticity rule's own
