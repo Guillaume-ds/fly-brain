@@ -31,11 +31,11 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Reproduction mechanic — multi-fly `Environment`, stochastic trigger, parent cost | **done, tested** (`decisions.md` #20) |
 | `game/colony.py` — per-fly circuits/genomes (escape + plasticity), offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21, #26) — real natural birth observed in a full run, colony driven by actual trained/learning circuits end to end |
 | `fly_brain/plasticity.py` — KC/MBON/DAN circuit, dopamine-gated lifetime plasticity, audit hooks | **done, tested** (`decisions.md` #26) — real learning curves verified (reward, punishment, generalization), wired into `Colony`, prior-vs-live gain split verified on reproduction |
-| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); **partly a reward-design gap, not just a curriculum one** — starvation produces no learning signal at all (`decisions.md` #28) |
+| No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); attribution fixed (#37) and hunger-loss punishment fixed (#38), but still no mechanism gives a fly a reason to actively *search* for food — the exploration-bootstrapping gap remains open |
 | `tests/` — contract tests (item contract, mutation-verified) | **done** (`decisions.md` #28) |
 | Live game loop (`game/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
 | Stage 2 (noisy escape) | **done, smoke-test trained** (`decisions.md` #36) — real fitness signal with food percepts present alongside the spider; a longer real run is still future work, same caveat as stage 1 |
-| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Actual foraging success is still blocked on #28's reward-design gap, unrelated to training |
+| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37) and hunger-loss punishment (#38) are both fixed now; actual foraging success is still blocked on the exploration-bootstrapping gap (nothing gives a fly a reason to search), unrelated to training |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
 | Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19), not started — deliberately deferred until the core Python game loop works end to end |
@@ -192,15 +192,14 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     unaffected. Still open, deliberately: home-region geometry, whether
     `max_population` stays shared or goes per-player, the combat damage
     constant, and the kill-transfer fraction (real risk to tune around:
-    could make combat more lucrative than foraging, on top of #28's
-    already-known foraging weakness) — all placeholders, not tuned by
-    playing yet.
+    could make combat more lucrative than foraging, on top of the
+    still-open exploration-bootstrapping gap, `decisions.md` #38) — all
+    placeholders, not tuned by playing yet.
 
 Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
 dedicated audit CLI/visualization on top of the hooks already in place;
-the open question of whether hunger loss should carry a punishment
-signal (#28); a live test of `create_mob`'s mandatory clause against
+a live test of `create_mob`'s mandatory clause against
 the real encoder (`world/measure_encoder.py --encoder nomic`, needs a
 machine that can reach huggingface.co); and the follow-on ideas raised
 alongside this work but deliberately not folded in — multi-colony
@@ -227,14 +226,24 @@ yet started (see "After that" below).
   #36's: real improvement (survived to tick 449 vs 426, kept
   reproducing after starvation deaths began) but not a full fix — the
   colony still went fully extinct.
-- **What's left of #28** — hunger *loss* itself (decay, or a
-  `starve`-effect mob's negative delta) still carries no punishment
-  signal, and nothing gives a fly a reason to actively search for food
-  rather than stumble into it. This is what's actually standing between
-  "the freeze+override mechanism works, attribution is now correct"
-  (#36, #37) and "the colony forages well" — a reward-formula decision,
-  not more training and not another attribution bug. Not designed, not
-  started.
+- ~~Hunger-loss punishment~~ done, see `decisions.md` #38. Extended
+  `reinforce()`'s punishment term symmetrically with health loss:
+  `max(0, -ΔHUNGER) * weight`. In practice this fires exactly and only
+  from a `starve`-effect mob — decay never reaches `effects` (#37), and
+  items/tiles can't produce a negative hunger delta under the current
+  Result vocabulary. Verified live: a fly repeatedly killed by a
+  `starve` mob now shows real reinforcement (3 events, gain drift 2.69,
+  probe valence shifting negative) where before this entry it learned
+  nothing at all from being killed that way.
+- **What's still open** — decay itself remains deliberately unpunished
+  (a colony that quietly starves without ever touching a `starve` mob
+  still gets no punishment signal from that decline), and, more to the
+  point, punishing a known hunger-loss source once burned is still not
+  the same as giving a fly a reason to actively *search* for food in the
+  first place. This exploration-bootstrapping gap is what's actually
+  standing between "the freeze+override mechanism works, attribution and
+  hunger-loss punishment are both correct" (#36, #37, #38) and "the
+  colony forages well." Not designed, not started.
 - REINFORCE implementation, compared against ES on the same stage-1 task.
 - **Open-ended world** — replace the fixed-size grid with true open-ended,
   randomly-generated terrain, plus the spiderweb v2 mechanic (spiders drop

@@ -290,10 +290,23 @@ class PlasticityAgent:
         gain turns the population into a genuine graded rate code: the
         fraction of a group crossing threshold grows smoothly with
         magnitude instead of jumping straight to 100%.
+
+        Hunger LOSS is punished symmetrically with health loss
+        (decisions.md #38) -- closing the gap #28 first flagged, that a
+        `starve`-effect mob (decisions.md #30) taught a fly nothing,
+        unlike a `damage` mob's health loss. Deliberately NOT the same
+        fix as punishing decay itself: `deltas` only ever carries real
+        effects (decisions.md #37), never the constant per-tick hunger
+        decay, so this term only ever fires from a real event -- an
+        item/tile can't even produce a negative hunger delta under
+        today's Result vocabulary (`food` is the only concept touching
+        `HUNGER`, always `sign=+1`), so in practice this is exactly and
+        only the `starve` mob case.
         """
         reward = max(0.0, deltas.get(Channel.HUNGER, 0.0)) * CHANNEL_WEIGHTS[Channel.HUNGER]
         punishment = (
             max(0.0, -deltas.get(Channel.HEALTH, 0.0)) * CHANNEL_WEIGHTS[Channel.HEALTH]
+            + max(0.0, -deltas.get(Channel.HUNGER, 0.0)) * CHANNEL_WEIGHTS[Channel.HUNGER]
             + max(0.0, deltas.get(Channel.STUCK_TICKS, 0.0)) * CHANNEL_WEIGHTS[Channel.STUCK_TICKS]
         )
         if reward == 0.0 and punishment == 0.0:

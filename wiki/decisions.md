@@ -2380,3 +2380,86 @@ description chosen to produce a weak hunger effect shows up as its own
 small positive number (the concrete regression case); `Colony.step()`
 verified via a spy to actually call `reinforce()` with `result.effects`;
 the newborn-guard regression above. 86 tests passing total.
+
+## 38. Hunger-loss punishment, symmetric with health-loss
+
+**Context:** #37 fixed *attribution* but explicitly scoped out the
+question it surfaced: since `ColonyStepResult.effects` now isolates real
+effects from decay, should a fly's hunger *loss* — specifically, a
+`starve`-effect mob's negative hunger delta (`decisions.md` #30) —
+itself carry a punishment signal? Requested directly: **let's tackle
+it**, closing the last open clause of #28.
+
+**Decision: extend `reinforce()`'s punishment term with `max(0,
+-ΔHUNGER) * CHANNEL_WEIGHTS[HUNGER]`, structurally identical to the
+existing `max(0, -ΔHEALTH) * CHANNEL_WEIGHTS[HEALTH]` term.**
+
+```python
+punishment = (
+    max(0.0, -deltas.get(Channel.HEALTH, 0.0)) * CHANNEL_WEIGHTS[Channel.HEALTH]
+    + max(0.0, -deltas.get(Channel.HUNGER, 0.0)) * CHANNEL_WEIGHTS[Channel.HUNGER]
+    + max(0.0, deltas.get(Channel.STUCK_TICKS, 0.0)) * CHANNEL_WEIGHTS[Channel.STUCK_TICKS]
+)
+```
+
+**Deliberately NOT the same thing as punishing decay itself.** `deltas`
+is `result.effects` (#37) — it only ever carries real EFFECT deltas,
+never the constant per-tick hunger decay, by construction. This entry
+doesn't touch that boundary at all. In practice that means the new term
+fires from exactly one place today: a `starve`-effect mob. An item or
+tile can't produce a negative hunger delta under the current Result
+vocabulary — `food` is the only registered concept that touches
+`HUNGER`, and it's always `sign=+1` (`decisions.md` #30) — so there's no
+way to under- or over-reach the scope of this fix by accident; it can
+only ever fire where #28 originally flagged the gap.
+
+**Why not also punish decay:** decay happens to every fly, every tick,
+unconditionally, regardless of anything the fly did. Punishing it would
+mean a fly gets punished merely for existing, which either washes out
+into a constant background signal the dopamine-gated rule has to learn
+to ignore, or — worse — reopens exactly the dilution problem #37 just
+fixed, this time in the opposite direction (a real reward getting
+partly cancelled by an ever-present punishment instead of an ever-present
+"reward" as before). Decay staying outside `effects` remains the
+correct boundary; this entry only closes the gap on the *effect* side of
+it.
+
+**Verified live**, same style as #26/#35/#37: a fresh colony (single
+fly, encounters gated so only a `starve`-effect mob (`strength=5`)
+touches it, hunger/health reset between exposures so death doesn't cut
+the run short) repeatedly contacted the mob for up to 15 ticks.
+`PlasticityAgent.probe()` on the mob's own attribute vector moved from
+`1.663` before any exposure to `1.556` after — a real, negative shift —
+with 3 reinforcement events firing and `gain_drift() == 2.69`. Before
+this entry, the same scenario produced zero reinforcement events and no
+gain drift at all: the fly could be repeatedly killed by a `starve` mob
+and learn literally nothing from it.
+
+**Not touched:** `Channel.HUNGER`'s *reward* term (`max(0, ΔHUNGER) *
+weight`) — unchanged, still fires only on a positive hunger delta, so a
+real food pickup keeps producing reward exactly as before; the two
+terms can't both fire off the same delta (one requires `Δ > 0`, the
+other `Δ < 0`). Nothing in `world/env.py` changed — this is entirely a
+`fly_brain/plasticity.py` change, the reverse of #34/#35/#37's pattern.
+
+**Explicitly still open, not decided here:** decay itself remains
+unpunished by design (see above) — a colony that quietly starves without
+ever touching a `starve` mob still gets no punishment signal from that
+decline, only from the eventual health/hunger-loss *effects* of
+whatever kills it. More importantly, this entry gives a fly a reason to
+*avoid* a known hunger-loss source once it's been burned by one, but
+still no mechanism that gives it a reason to actively *search* for food
+in the first place — that remains the harder, separate
+exploration-bootstrapping problem #28 and #37 both flagged and neither
+this entry nor #37 claims to solve.
+
+Tests: `tests/test_hunger_punishment.py` (new, 6 tests) — hunger loss
+alone triggers a reinforcement event and nonzero `gain_drift()`; it
+depresses the approach pathway and potentiates the avoid pathway for the
+KCs made eligible that tick, the same direction health-loss punishment
+already produces; repeated exposure moves `probe()`'s valence negative
+(the colony.md testing contract, run as a standing regression here
+rather than a one-off); hunger-loss and health-loss punishment agree in
+kind, not magnitude (different `CHANNEL_WEIGHTS`); a positive hunger
+delta still reads as reward only, never punishment too; an empty deltas
+dict remains a no-op. 92 tests passing total.

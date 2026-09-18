@@ -125,20 +125,28 @@ for both reward and punishment, and generalization to similar-but-
 different items (`decisions.md` #22 part 2, #26). Effect-attribution
 fixed a real signal-quality bug (#37): a weak but genuine food pickup
 could previously net to a negative number against decay and produce
-*zero* reward — `ColonyStepResult.effects` isolates it now.
+*zero* reward — `ColonyStepResult.effects` isolates it now. Hunger
+*loss* itself is punished as of #38, symmetric with health loss — in
+practice this fires exactly and only from a `starve`-effect mob, since
+decay never reaches `effects` and items/tiles can't produce a negative
+hunger delta under the current Result vocabulary.
 
 **What's left:**
 - done recently: two real bugs found and fixed while verifying this —
   a uniform DAN current that saturated instead of grading with
   magnitude, and a depression-only Hebbian rule that never moved a
   direct-spike-readout MBON (#26); effect-attributed reward, replacing
-  a whole-tick state diff that diluted weak effects with decay (#37)
-- next: whether hunger *loss* itself (decay, or a `starve`-effect mob)
-  should carry its own punishment signal remains open (`decisions.md`
-  #28, #37) — attribution is now correct, but nothing yet gives a fly a
-  reason to actively search for food rather than stumble into it; a
-  real semantic encoder (see world.md) would make *what* gets learned
-  more meaningful without changing *how* learning works
+  a whole-tick state diff that diluted weak effects with decay (#37);
+  hunger-loss punishment, closing #28's last open clause — a fly that
+  gets killed by a `starve` mob now actually learns to avoid it (#38)
+- next: decay itself remains deliberately unpunished (#38) — a colony
+  that quietly starves without ever touching a `starve` mob still gets
+  no punishment signal from that decline. And punishing a known
+  hunger-loss source once burned is still not the same as giving a fly
+  a reason to actively *search* for food in the first place — that
+  exploration-bootstrapping problem is still open. A real semantic
+  encoder (see world.md) would make *what* gets learned more meaningful
+  without changing *how* learning works
 
 **Logic for testing:** contract = repeatedly reinforcing the same
 percept with a consistent-sign outcome must move `probe()`'s valence
