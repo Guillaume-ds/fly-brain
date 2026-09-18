@@ -78,8 +78,9 @@ def apply_requests(
 ) -> list[tuple[str, str | None]]:
     """Pure logic, no I/O -- testable without a real stdin/thread. Returns
     (request, action_name) per request, action_name is None if nothing
-    applied. `argument` (decisions.md #27) is passed through to the
-    action's fn only when that action declares takes_argument.
+    applied. `arguments` (decisions.md #27, #30-#32) is passed through
+    to the action's fn as **kwargs only when that action declares an
+    argument_schema.
     """
     by_name = {action.name: action for action in actions}
     results: list[tuple[str, str | None]] = []
@@ -89,8 +90,8 @@ def apply_requests(
         action = by_name.get(action_name) if action_name is not None else None
         if action is None:
             action_name = None
-        elif action.takes_argument:
-            action.fn(outcome[1])
+        elif action.argument_schema is not None:
+            action.fn(**outcome[1])
         else:
             action.fn()
         results.append((request, action_name))

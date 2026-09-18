@@ -5,13 +5,20 @@ model is in the loop -- same discipline used everywhere else in this
 project (EscapeAgent tested with untrained weights before ES, Environment
 tested with random actions before any agent). Not meant to understand
 nuanced requests; that's the real controller's job. `create_item`
-(decisions.md #27) is handled the same crude way: a fixed trigger
-phrase, everything after it taken verbatim as the description -- no
-attempt at real language understanding, same spirit as everything else
-here.
+(decisions.md #27, #32) is handled the same crude way: a fixed trigger
+phrase, everything after it taken verbatim as both name and description,
+strength fixed at the midpoint -- no attempt at real language
+understanding, same spirit as everything else here.
+
+`create_tile`/`create_mob` deliberately aren't covered by this stub --
+picking a real `effect` (decisions.md #30) or deciding a tile's
+description is a language-understanding task, not a keyword match. That's
+exactly what ClaudeController exists for.
 """
 
 from __future__ import annotations
+
+from world.results import MID_STRENGTH
 
 from .actions import ActionSpec
 from .base import WorldController
@@ -22,14 +29,14 @@ ITEM_TRIGGERS = ("create item:", "add item:", "new item:")
 
 
 class RuleBasedController(WorldController):
-    def choose_action(self, request: str, actions: list[ActionSpec]) -> tuple[str, str | None] | None:
+    def choose_action(self, request: str, actions: list[ActionSpec]) -> tuple[str, dict] | None:
         text = request.lower()
 
         for trigger in ITEM_TRIGGERS:
             if trigger in text:
                 description = request[text.index(trigger) + len(trigger):].strip()
                 if description and any(a.name == "create_item" for a in actions):
-                    return "create_item", description
+                    return "create_item", {"name": description, "description": description, "strength": MID_STRENGTH}
                 return None
 
         subject = "food" if "food" in text else "spider"
@@ -41,4 +48,4 @@ class RuleBasedController(WorldController):
             return None
 
         name = f"{direction}_{subject}_rate"
-        return (name, None) if any(a.name == name for a in actions) else None
+        return (name, {}) if any(a.name == name for a in actions) else None

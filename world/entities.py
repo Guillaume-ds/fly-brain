@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .results import Effect
+
 
 @dataclass
 class Position:
@@ -25,7 +27,9 @@ class Item:
     this world: food is an ItemType like any other, not a separate class
     (decisions.md #28). Nothing about an item's behavior is configured
     per instance; what happens on contact comes entirely from
-    `attributes` via the Result registry (world/results.py).
+    `attributes` via the Result registry (world/results.py), scaled by
+    `strength` (decisions.md #32) -- `strength` sets overall magnitude
+    only, never which channel moves or in which direction.
 
     `radius` is both how far away a fly can perceive it and how close a
     fly must be to pick it up -- one distance, one name.
@@ -34,25 +38,56 @@ class Item:
     position: Position
     radius: float
     attributes: np.ndarray
+    strength: int
 
 
 @dataclass
-class Threat:
-    """Deliberately NOT an Item (decisions.md #28). A threat is perceived
-    exactly like one -- same anonymous Percept, same attribute vector --
-    but it moves, it is never consumed, and contact kills through
-    `Environment.determine_fly_death()` rather than through the Result
-    registry. That asymmetry is a known, deliberate carve-out, not an
-    oversight: routing lethality through Result-registry similarity
-    would make a spider's deadliness depend on the encoder's judgment,
-    which would silently change what the ES-trained escape circuit was
-    trained against. See wiki/world.md for the open question of whether
-    threats should eventually become items.
+class Tile:
+    """An `Item` in every way except one: never consumed. A live instance
+    of a registered ItemType (world/items.py) used as an area effect
+    (decisions.md #31, #32) -- same encoder-driven attributes, same
+    Result-registry effect, same `strength` magnitude scaling -- but its
+    effect re-applies every tick a fly remains within `radius`, at a
+    fraction of what a one-shot item pickup would give
+    (`Environment.resolve_tile_effects()`), rather than being removed on
+    contact.
     """
 
     position: Position
     radius: float
     attributes: np.ndarray
+    strength: int
+
+
+@dataclass
+class Mob:
+    """A live instance of a registered MobType (world/items.py) -- moves,
+    is never consumed. Renamed from `Threat` (decisions.md #31): the
+    class stopped meaning "always dangerous" the moment it could be
+    beneficial.
+
+    `attributes` drives perception only, via the same anonymous Percept
+    every other entity uses -- never a mob's actual effect on a fly.
+    That comes entirely from `effect`/`strength`, authored and read
+    directly, never derived from `attributes` (decisions.md #30): the
+    encoder can't be trusted with anything that could invalidate the
+    frozen escape circuit's training, the way it safely can be for an
+    item or a tile.
+
+    `effect`/`strength` are `None` only for the one built-in case: the
+    spider, which still kills unconditionally on contact
+    (`Environment.determine_fly_death()`), exactly as before this
+    entry -- unrelated to anything a player can create. A player-created
+    mob always has both set, and its contact effect is graded per tick
+    of contact, not instant (decisions.md #31) -- see
+    `Environment.resolve_mob_contact()`.
+    """
+
+    position: Position
+    radius: float
+    attributes: np.ndarray
+    effect: Effect | None = None
+    strength: int | None = None
 
 
 @dataclass

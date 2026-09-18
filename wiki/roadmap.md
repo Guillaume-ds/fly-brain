@@ -15,11 +15,11 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 |---|---|
 | Connectome data access (`fly_brain/data.py`) | done |
 | Connectome exploration (`analyze`, `simulate` commands) | done |
-| `world/env.py` — multi-fly, continuous spawn-rate params, threat movement, anonymous `Percept` observation | done, tested (`decisions.md` #14, #15, #20, #25) |
+| `world/env.py` — multi-fly, continuous spawn-rate params, mob movement, anonymous `Percept` observation | done, tested (`decisions.md` #14, #15, #20, #25) |
 | `world/items.py`, `world/results.py` — item-encoding pipeline + Result registry | done, tested (`decisions.md` #24, #25); real `NomicItemEncoder` untested live (`huggingface.co` blocked here) |
-| Player-driven item creation — generic `Item`, `create_item` director action | **done, tested** (`decisions.md` #27) |
-| Player-driven *mob* creation (`create_mob`) | **does not exist** — one built-in `Threat`/`Mob` type, rate-tunable only; design finished (`decisions.md` #30–#32) |
-| Player-driven *tile*/terrain creation (`create_tile`) | **does not exist** — design finished, reuses the item mechanism (`decisions.md` #31, #32) |
+| Player-driven item creation — generic `Item`, `create_item` director action | **done, tested** (`decisions.md` #27, #32) |
+| Player-driven *tile* creation — `Tile`, `create_tile` director action | **done, tested** (`decisions.md` #31, #32) — reuses the item mechanism, never consumed, a fraction re-applied every tick |
+| Player-driven *mob* creation — `Threat` renamed `Mob`, `create_mob` director action | **done, tested** (`decisions.md` #30–#32) — authored `effect`/`strength`, never derived from the embedding; the built-in spider is unaffected (still unconditional insta-kill) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -110,13 +110,39 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     learning gap honestly rather than leaving it framed as purely a
     curriculum issue.
 
+13. ~~Player-driven mob/tile creation~~ done, see `decisions.md` #30–#32.
+    `create_tile` (a new `Tile` entity — an `Item` in every way except
+    never consumed, its effect a fraction re-applied every tick) and
+    `create_mob` (`Threat` renamed `Mob`; an authored `effect`/`strength`
+    pair drives its contact effect directly, never the embedding, which
+    now drives perception only) both land alongside `create_item`, all
+    three sharing one `strength` magnitude field. `director/`'s
+    `ActionSpec` gained a real per-action `argument_schema` (multiple
+    typed fields, one of them a real enum) in place of the old single
+    free-text argument — the schema itself is what makes an
+    unsupported request ("spits fire") have nowhere to land. The
+    contract test now covers item/tile/mob together: item and tile
+    satisfy the full (a)/(b)/(c) item contract identically (tile scaled
+    per tick), mob is pinned as the documented carve-out on (c), and
+    every `Effect` member is checked to move only its own channel in
+    the right direction. Verified live: graded mob damage (a
+    strength-1 mob survivable over several ticks, unlike the built-in
+    spider's unconditional insta-kill, which is unaffected), a
+    positive-strength `free` mob rescuing an already-stuck fly, and the
+    mandatory embedding clause firing only for `damage`/`starve`.
+
 Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
 dedicated audit CLI/visualization on top of the hooks already in place;
-finer per-item behavior (movement, spawn-rate weighting) beyond the one
-shared default `create_item` currently gives every item — deliberately
-left simple, per #27; and the open question of whether hunger loss
-should carry a punishment signal (#28).
+the open question of whether hunger loss should carry a punishment
+signal (#28); a live test of `create_mob`'s mandatory clause against
+the real encoder (`world/measure_encoder.py --encoder nomic`, needs a
+machine that can reach huggingface.co); and the follow-on ideas raised
+alongside this work but deliberately not folded in — multi-colony
+ownership per player, a resource-cost system for creation actions, and
+a preview/confirm UX pattern (generate a template from a request, let
+the player edit numbers or text before committing) that's really a
+frontend-and-resource-cost-sequenced feature, not a backend one.
 
 The frontend is a separate, independent track, also unblocked and not
 yet started (see "After that" below).
@@ -141,23 +167,27 @@ yet started (see "After that" below).
   description-driven), plus a new permanent "trait" effect tier
   alongside today's transient `Channel` one. Brainstormed, not
   designed, not started (`decisions.md` #29).
-- **Per-kind typed creation functions** — `create_item` / `create_mob` /
-  `create_tile` with real per-kind parameter schemas instead of one
-  free-text action, each composing its own normalized description
-  string for the encoder, and unsupported parameters dropped by having
-  nowhere to land in the schema. **Fully designed** (`decisions.md`
-  #30–#32 — `create_tile` designed, mob valence reworked to an authored
-  `effect`/`strength` pair so mobs can be good or bad like items/tiles,
-  `Threat` renamed `Mob`, and item/tile gaining a `strength` magnitude
-  dial that scales their description-derived blend uniformly without
-  ever choosing its shape or sign), not implemented; the mob design is
-  gated on running `python -m world.measure_encoder --encoder nomic`
-  somewhere that can reach huggingface.co. Two follow-on ideas raised
-  alongside this — multi-colony ownership per player, and a
-  resource-cost system for creation actions — are deliberately not
-  folded in yet; see #31's sequencing note.
 - **Two-player "god vs devil" mode** — human vs computer or human vs a
   friend, one growing the colony, one destroying it, same
   instructions→world→learning loop multiplexed across two sources.
   Noted for the future; multiplayer explicitly out of scope for now
   (`decisions.md` #29).
+- **Multi-colony ownership** — N players, each with their own colony in
+  one shared world, helping their own and degrading everyone else's; a
+  real step up from "god vs devil"'s one shared colony. Needs a `Fly`
+  owner, spatial scoping (creation targets a region, not the whole
+  grid), and a real decision on whether a fly can perceive a rival
+  colony's flies at all (nothing does today). Raised, not designed.
+- **Resource-cost system** — bound creation (item/mob/tile all share one
+  `strength` field now, `decisions.md` #32, which is the hook a uniform
+  cost formula needs) behind a per-player resource pool instead of a
+  flat type-count cap, so spamming creation is a trade-off, not a wall.
+  Raised, not designed.
+- **Preview/confirm creation UX** — before committing, show the player
+  what a request actually produced (the Result-registry blend weights,
+  `strength`, an eventual resource cost) and let them either refine the
+  text or edit the numbers directly, the latter decoupling the
+  description from what it derives. Needs the resource-cost system (for
+  the cost figure) and the frontend (for the modal/sliders) to exist
+  first — a UX pattern layered on top of `create_item`/`create_tile`/
+  `create_mob`, not a change to their mechanics. Raised, not designed.

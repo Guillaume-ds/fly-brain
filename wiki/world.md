@@ -14,7 +14,7 @@ doesn't implement produces the closest thing the engine *does*
 implement, or nothing; it never changes what the engine is capable of.
 Anything that counts as an item, however it was created, must resolve
 to a plain attribute vector before it can affect a fly; nothing about
-*what it is* should ever reach a fly as a name or type. `Threat` is the
+*what it is* should ever reach a fly as a name or type. `Mob` is the
 single documented exception, and it's pinned by a test so it can't
 widen (see "What is an item?" below).
 
@@ -22,24 +22,29 @@ widen (see "What is an item?" below).
 
 ### How is the world built?
 
-**What it is:** a grid holding flies, food, threats, and generic items,
-advancing in fixed discrete ticks. Spawning, movement, and death rules
-live entirely in `world/env.py`; nothing in that file knows a fly's
-brain exists.
+**What it is:** a grid holding flies, mobs, items, and tiles, advancing
+in fixed discrete ticks. Spawning, movement, and death rules live
+entirely in `world/env.py`; nothing in that file knows a fly's brain
+exists.
 
 **Where we stand:** built and tested — multi-fly, continuous spawning,
-health/damage/stuck-ticks state, a generic item registry
-(`decisions.md` #14, #15, #20, #25, #27).
+health/damage/stuck-ticks state, and generic item/tile/mob registries
+(`decisions.md` #14, #15, #20, #25, #27, #30–#32).
 
 **What's left:**
-- done recently: anonymous `Percept` sensing (#22/#25), the generic
-  `Item` entity and player-created item types (#27)
+- done recently: anonymous `Percept` sensing (#22/#25); the generic
+  `Item` entity and player-created item types (#27); `Tile` (an `Item`
+  that's never consumed) and `Mob` (renamed from `Threat`, an
+  authored `effect`/`strength` pair driving its contact effect) and
+  their own player-created types (#30–#32)
 - next: nothing specifically planned for the grid/tick mechanics
-  themselves — the open item is terrain (see below)
+  themselves — the remaining open item is true area terrain, since
+  today's `Tile` is a point-and-radius zone, not irregular shaped
+  ground (see "What's still missing from open" below)
 
 **Logic for testing:** contract = `Environment.step()` returns a
 structurally valid `ColonyStepResult` for *any* mix of registered
-item/food/threat types, and never raises. Test by building an
+item/tile/mob types, and never raises. Test by building an
 `Environment` with a randomized mix of item types (including freshly
 created ones), running N ticks, and asserting no exception plus valid
 observation/death/birth shapes every tick — one generic invariant test,
@@ -58,62 +63,56 @@ built. The engine's capabilities only ever change by someone editing
 this project's source, never by a player asking well enough.
 
 Two kinds of action exist today: nudging an existing spawn rate, and
-creating a new *item* type from a description.
+creating a new element — an *item*, a *tile*, or a *mob* — from a
+request.
 
 **Where we stand:** `RuleBasedController` + `Environment` wiring fully
-tested end to end, including the parameterized `create_item` action.
+tested end to end, including all three parameterized create actions.
 `ClaudeController` is built to the identical contract but has **never
 been exercised live** — no API credentials in this sandbox
 (`decisions.md` #16, #27).
 
-The gap against the chain in [state.md](state.md): of the three element
-kinds an instruction is supposed to be able to create — **item, mob,
-environment tile** — only *item* has a creation function.
-`env.add_item_type(description)` exists and takes free text only.
-There is no `create_mob`/`add_threat_type`: `Threat` spawns from one
-built-in type fixed at `Environment.__init__`, so players can nudge how
-often spiders appear but cannot invent a second kind of spider. There
-is no tile concept at all. And there is exactly one instruction source
-wired in, not two.
+All three element kinds an instruction is supposed to be able to create
+— **item, mob, environment tile** — now have a creation function
+(`decisions.md` #30–#32). Each `ActionSpec` in the registry carries a
+real per-action `argument_schema` (multiple typed fields, `create_mob`'s
+`effect` a real enum) instead of the old single free-text argument —
+that schema is the actual mechanism behind "instructions never widen
+the engine": a request for something outside it ("spits fire") has
+nowhere to bind and is silently dropped, never routed around.
+
+`create_item`/`create_tile` share one shape: `name`, a free-text
+`description` whose embedding drives both perception and the *shape* of
+the effect (via the Result registry), and `strength` scaling that
+effect's magnitude only. `create_mob` is deliberately different:
+`name`+embedding drive perception only, while an authored `effect`
+(`heal`/`damage`/`feed`/`starve`/`trap`/`free`) and `strength` drive the
+actual effect directly — the encoder is never trusted with anything
+that could invalidate the frozen escape circuit's training. A mob whose
+`effect` is lethal (`damage`/`starve`) gets a mandatory clause forced
+into its embedded string, worded from the Result registry's own
+vocabulary, so a mimic with a harmless-sounding name still registers
+some danger to the frozen reflex — whether that clause survives being
+swamped by the name on a *real* encoder is still unverified
+(`python -m world.measure_encoder --encoder nomic` needs a machine that
+can reach huggingface.co; everything above runs on the orthographic
+stub today).
 
 **What's left:**
-- done recently: extending the action registry to support a real
-  argument (`create_item`, #27) — the first crack in the old
-  zero-argument-only contract
-- next: **per-kind typed creation functions** — one function per element
-  kind (`create_item`, `create_mob`, `create_tile`) instead of a single
-  free-text one, each with a real parameter schema the translating LLM
-  fills in, and each composing its own normalized description string to
-  hand to the encoder. Two properties this is meant to buy: *which*
-  function gets called is a discrete, engine-defined choice (the
-  structure/effect split in `decisions.md` #29), and an unsupported
-  parameter in a request simply has nowhere to go in the schema, so it
-  is dropped silently rather than tempting anything to widen the
-  engine. **Designed, not implemented** (`decisions.md` #30, revised
-  by #31 and #32) — no code written. All three kinds now share the same
-  good/bad axis, and all three share one `strength` field: an item's
-  and a tile's embedding drives both perception and the *shape* of its
-  effect, with `strength` only scaling that effect's magnitude (a tile
-  is a lingering, re-applied variant of the same item mechanism); a
-  mob's embedding drives perception only, while an authored `effect`
-  (`heal`/`damage`/`feed`/`starve`/`trap`/`free`) and `strength` drive
-  its effect directly — `Threat` is renamed `Mob` to match (#31).
-  Gated on one measurement first: a creatable mob's *name*
-  has to reach the encoder (otherwise every mob sharing a
-  type/strength shares one vector and flies can't tell a spider from a
-  wasp), but a food-sounding name on a lethal mob then perceives as
-  food — and the escape reflex is frozen for life, so unlike the
-  plasticity circuit it can never learn around a convincing mimic. The
-  proposed answer is to compose the embedded string from the name plus
-  a mandatory mechanical clause phrased in the Result registry's own
-  vocabulary, so the mimicry is imperfect. Whether that clause survives
-  being swamped by the name is empirical: `python -m
-  world.measure_encoder --encoder nomic` measures it, and needs a
-  machine that can reach huggingface.co
-- also next: a live test of `ClaudeController` with a real key
+- done recently: `create_tile` and `create_mob` (`decisions.md`
+  #30–#32) — `Threat` renamed `Mob` to match, since the class stopped
+  meaning "always dangerous" the moment it could be beneficial; the
+  action registry's argument mechanism generalized from one free-text
+  field to a real per-action schema
+- next: a live test of `ClaudeController` with a real key, and the
+  `measure_encoder` run above against the real encoder
 - later: a second instruction source (the two-player mode, #29) —
   nothing in this surface is single-player-shaped, but nothing
-  multiplexes it either
+  multiplexes it either; a resource-cost system bounding creation
+  behind a per-player pool instead of a flat type-count cap (raised,
+  not designed, `wiki/roadmap.md`); a preview/confirm step showing a
+  request's derived numbers before committing (raised, not designed,
+  needs the resource-cost system and the frontend first)
 
 **Logic for testing:** contract = any `WorldController`, given the same
 registry, either returns a call against a real `ActionSpec` in that
@@ -135,24 +134,29 @@ the "instructions never widen the engine" half of the pillar contract.
 
 **What it is:** a point entity with a text-derived attribute vector,
 consumed on contact. Its effect on a fly (heal/damage/immobilize,
-blendable) comes entirely from that vector via the Result registry —
+blendable) comes entirely from that vector via the Result registry,
+scaled by `strength`'s overall magnitude only (`decisions.md` #32) —
 never assigned per item, never hardcoded by name.
 
 There is exactly **one** item entity in the code (`decisions.md` #28).
 Food is not a separate class — it's a registered `ItemType` like any
 player-created one, spawning through the same path into the same list.
 If you can't tell food and a player-invented berry apart by reading the
-code, that's the point.
+code, that's the point. `Tile` (`decisions.md` #31) is exactly this
+same mechanism, minus one thing: it's never consumed, and re-applies a
+fraction of its effect every tick a fly stays within its radius instead
+of once on contact — a place, not a thing you touch once.
 
 **Where we stand:** built and tested. The contract below is enforced by
 a real test (`tests/test_item_contract.py`), parametrised over every
-item-producing pathway, and verified to actually fail when the contract
-is broken (`decisions.md` #24, #25, #27, #28).
+item- and tile-producing pathway, and verified to actually fail when
+the contract is broken (`decisions.md` #24, #25, #27, #28, #32).
 
 **What's left:**
 - done recently: the Result registry (#25), the `create_item` action
-  (#27), and collapsing `Food` into `Item` so there's one concept
-  rather than three near-duplicates (#28)
+  (#27), collapsing `Food` into `Item` so there's one concept rather
+  than three near-duplicates (#28), and `create_tile` plus a `strength`
+  magnitude field shared by both (#31, #32)
 - next: swap in the real semantic encoder (`NomicItemEncoder`) once a
   reachable environment exists — everything today runs on the crude
   orthographic hashing stub, which is functionally correct but not
@@ -164,67 +168,66 @@ is broken (`decisions.md` #24, #25, #27, #28).
 `Observation` — and (c) produce its effect on a fly purely through
 Result-registry similarity, never a hardcoded per-type constant.
 
-**`Threat` satisfies (a) and (b) but deliberately not (c)** — it is
+**`Mob` satisfies (a) and (b) but deliberately not (c)** — it is
 perceived exactly like an item, but it moves, is never consumed, and
-kills through `determine_fly_death()` instead. That carve-out exists
-because routing lethality through encoder similarity would make a
-spider's deadliness depend on the encoder's judgment, silently changing
-what the ES-trained escape circuit was trained against. The test pins
-the carve-out precisely, so a threat can't quietly start behaving like
-an item (or vice versa) without a test failing.
+its effect (if any) is authored from `effect`/`strength` directly,
+never derived from the Result registry (`decisions.md` #30). That
+carve-out exists because routing lethality through encoder similarity
+would make a mob's deadliness depend on the encoder's judgment, silently
+changing what the ES-trained escape circuit was trained against — true
+for the built-in spider (still an unconditional insta-kill on contact,
+unaffected by any of this) and equally true for anything a player
+creates. The test pins the carve-out precisely, so a mob can't quietly
+start behaving like an item (or vice versa) without a test failing.
 
 `tests/test_item_contract.py` implements exactly this: for every
 pathway, spawn one, put a fly on it, and assert (a)/(b)/(c) on the
 resulting `Percept` and the resulting state delta — checking the delta
-against what `blend_deltas()` says it should be, which is what actually
-rules out a hardcoded constant hiding somewhere. It doesn't care *how*
-an item got made or what changed internally; only that "item-ness"
-survives. Run it whenever item-related code changes, instead of
-re-testing every function that touches an item.
+against what `blend_deltas()` says it should be (scaled by `strength`),
+which is what actually rules out a hardcoded constant hiding somewhere.
+For `Mob`, it additionally verifies every `Effect` member moves only its
+own channel, in the direction a positive `strength` implies. It doesn't
+care *how* an item/tile/mob got made or what changed internally; only
+that "item-ness" (or its documented absence) survives. Run it whenever
+item/tile/mob-related code changes, instead of re-testing every
+function that touches one.
 
 ---
 
 ### What's still missing from "open"?
 
-**What it is:** two of the three element kinds an instruction is
-supposed to be able to create don't exist as creatable things yet —
-though both are now fully designed, just not built.
+**What it is:** area effects exist now (`Tile`, `decisions.md` #31,
+#32), but only as a point-and-radius zone — a circle of fixed size
+centered on one cell, not a general shape. There's still no way to
+carve an L-shaped lava lake or a winding slow-zone; every tile today is
+round.
 
-*Mobs:* there is one built-in `Threat`/`Mob` type, created in
-`Environment.__init__` and tunable only by rate. A player can ask for
-more spiders; a player cannot ask for a *different* spider.
-
-*Environment:* nothing area-based exists at all — no lava tile, no
-slowing zone, no persistent hazard. Everything today is a discrete
-thing you touch, not a place you're in.
-
-**Where we stand:** design finished for both (`decisions.md` #30, #31,
-#32), implementation not started.
+**Where we stand:** the *mechanism* (perception, Result-registry effect,
+persistence) is built and tested; the *geometry* is deliberately the
+simplest thing that could reuse it, not a considered design for
+irregular terrain.
 
 **What's left:**
-- next: build the per-kind typed creation functions themselves (see
-  "How do instructions reach the world?" above) — `create_tile` reuses
-  the existing item mechanism almost entirely (same perception, same
-  Result-registry effect shape, only persistent instead of consumed,
-  with `strength` scaling magnitude only); `create_mob` needs `Threat`
-  renamed `Mob`, an `effect`/`strength` pair, and graded per-tick
-  contact damage replacing today's unconditional insta-kill for
-  anything player-created (the built-in spider is unaffected)
-- the mob blocker from #29 ("one gate, not two" — a spider's lethality
-  can't safely be encoder-derived under the stub encoder, #28) no
-  longer applies the way it did: `effect`/`strength` are authored
-  parameters, read directly, never through the Result registry, so a
-  created mob's effect doesn't depend on the encoder's judgment at all
-  any more. What the encoder *does* still decide is perception — can a
-  fly tell a described mob apart from another, and can a misleadingly
-  gentle name blunt the frozen escape reflex's response to something
-  that's actually lethal (#30's mandatory clause). That's a quality
-  question now, not a correctness one, and it's what
-  `world/measure_encoder.py` measures
+- done recently: `Tile` itself, and the mob-creation blocker this
+  section used to describe (`decisions.md` #29's "one gate, not two")
+  no longer applies to a *created* mob at all — `effect`/`strength` are
+  authored, read directly, never through the Result registry, so a
+  created mob's effect doesn't depend on the encoder's judgment. What
+  the encoder still decides is perception quality: can a fly tell one
+  described mob from another, and does a misleadingly gentle name blunt
+  the frozen escape reflex's response to something actually lethal
+  (`create_mob`'s mandatory clause, `decisions.md` #30, #31). That's
+  unverified against the real encoder — `world/measure_encoder.py`
+  needs a machine that can reach huggingface.co
+- next: decide whether true irregular terrain is worth building at all
+  before the frontend exists to make placing it comprehensible — open
+  design question, not started
 
-**Logic for testing:** none yet — no contract exists until the design
-does. Once one exists, the first thing to check against it should be
-the item contract above: does a terrain tile still satisfy "anonymous
-to the fly, effect derived from its vector, nothing hardcoded"? If not,
-that's a sign the item contract itself needs to widen, not that terrain
-needs a special case.
+**Logic for testing:** none yet for irregular terrain specifically — no
+contract exists until the design does. `Tile`'s own contract is already
+covered above, by the same item contract every other pathway satisfies.
+Whatever irregular terrain becomes, the first thing to check against it
+should be that same contract: does it still satisfy "anonymous to the
+fly, effect derived from its vector, nothing hardcoded"? If not, that's
+a sign the item contract itself needs to widen, not that terrain needs
+a special case.

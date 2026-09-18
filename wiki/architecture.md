@@ -34,17 +34,24 @@ path.
 
 ## `world/` — the simulation
 
-- **`entities.py`** — plain dataclasses: `Position`, `Item`, `Threat`,
-  `Fly`. There is exactly **one** item entity (`decisions.md` #28):
-  food is not a class, it's a registered `ItemType` like any
+- **`entities.py`** — plain dataclasses: `Position`, `Item`, `Tile`,
+  `Mob`, `Fly`. There is exactly **one** item entity (`decisions.md`
+  #28): food is not a class, it's a registered `ItemType` like any
   player-created one. `Item` is stationary, single-use, and has no
   behavior beyond what its attribute vector produces through the Result
-  registry; `radius` is both how far it can be perceived and how close a
-  fly must be to pick it up — one distance, one name. `Threat` is the
-  documented exception: same shape, same anonymous perception, but it
-  moves, is never consumed, and kills through `determine_fly_death()`
-  rather than the Result registry (see its docstring for why). `Fly`
-  carries id, position, hunger, `health`, `stuck_ticks`, and
+  registry, scaled by `strength`'s magnitude (`decisions.md` #32);
+  `radius` is both how far it can be perceived and how close a fly must
+  be to pick it up — one distance, one name. `Tile` is `Item` in every
+  way except never consumed: its effect re-applies at a fraction of
+  strength every tick a fly stays within radius (`decisions.md` #31).
+  `Mob` (renamed from `Threat`, #31) is the documented exception: same
+  shape, same anonymous perception, but it moves, is never consumed, and
+  its effect (if any) is authored from `effect`/`strength` directly,
+  never derived from the Result registry (`decisions.md` #30) — the
+  built-in spider still kills unconditionally through
+  `determine_fly_death()` (`effect=None`), a created mob deals graded
+  per-tick contact damage/heal/etc instead (see its docstring for why).
+  `Fly` carries id, position, hunger, `health`, `stuck_ticks`, and
   `vulnerable_ticks_left`. No behavior, just data.
 - **`items.py`** (`decisions.md` #22/#24/#27) — the content-authoring
   pipeline that turns a short text description into an item's small,
@@ -58,41 +65,56 @@ path.
   trigrams — orthographic, not semantic) used to test everything
   downstream without network access, and what every CLI entry point
   actually runs today. `ItemType` is everything the world needs to keep
-  spawning one kind of item — name, description, prototype vector
-  (encoded once), `spawn_rate`, `radius`. Food, threats, and
-  player-created types are all `ItemType`s; `name` exists only so
-  `director/` has a handle on the food rate it's allowed to tune.
-  `jitter()` applies per-instance Gaussian noise to an already-encoded
-  prototype at spawn time, re-normalized to unit norm. Entirely a
-  content-authoring concern — never exposed to a fly.
-- **`results.py`** (`decisions.md` #22 part 5, #25, #28) — the Result
-  registry: a small, fixed set of real mechanical outcomes, each encoded
-  the same way items are. `Channel` is a `StrEnum` whose every member's
-  value names the `Fly` field it writes (`HUNGER`→`hunger`, etc.) — that
-  link is what lets `apply_result()` stay generic instead of branching
-  per channel, and it means a Result on an unregistered channel raises
-  rather than being silently dropped. `blend_deltas()` is a
-  clipped-cosine-similarity blend across every registered Result,
+  spawning one kind of item or tile — name, description, prototype
+  vector (encoded once), `spawn_rate`, `radius`, `strength`
+  (`decisions.md` #32). Food, player-created items, and player-created
+  tiles are all `ItemType`s; `name` exists so `director/` has a handle
+  on the food rate it's allowed to tune. `MobType` (`decisions.md` #31)
+  is the sibling for `Mob`: same shape, plus an `effect`/`strength` pair
+  that's `None` only for the built-in spider. `jitter()` applies
+  per-instance Gaussian noise to an already-encoded prototype at spawn
+  time, re-normalized to unit norm. Entirely a content-authoring
+  concern — never exposed to a fly.
+- **`results.py`** (`decisions.md` #22 part 5, #25, #28, #30–#32) — the
+  Result registry: a small, fixed set of real mechanical outcomes, each
+  encoded the same way items are. `Channel` is a `StrEnum` whose every
+  member's value names the `Fly` field it writes (`HUNGER`→`hunger`,
+  etc.) — that link is what lets `apply_result()` stay generic instead
+  of branching per channel, and it means a Result on an unregistered
+  channel raises rather than being silently dropped. `blend_deltas()` is
+  a clipped-cosine-similarity blend across every registered Result,
   applied simultaneously — the mechanism that lets one item be both
   nourishing and damaging at once. The one place in this system that's
-  deliberately discrete rather than open-ended, on purpose.
+  deliberately discrete rather than open-ended, on purpose. Also home to
+  `Effect` (`heal`/`damage`/`feed`/`starve`/`trap`/`free`) and
+  `EFFECT_CHANNELS`, the per-channel sign table a mob's authored effect
+  is built from, `mob_effect_delta()` (the graded per-tick contact
+  damage/heal computation), `strength_magnitude()` (item/tile's
+  magnitude-only scaling), and `compose_mob_description()` (the
+  mandatory-embedding-clause logic, forced only for `LETHAL_EFFECTS`).
 - **`env.py`** — the `Environment` class, multi-fly: `self.flies:
-  list[Fly]` share one grid, one set of items and threats, one hunger
+  list[Fly]` share one grid, one set of items/tiles/mobs, one hunger
   clock each. Every registered `ItemType` — food included — spawns
-  through the same `spawn_of()` path into the same `self.items` list at
-  its own `spawn_rate`, bounded by one shared `max_items`; threats spawn
-  the same way into their own list and wander
-  (`threat_move_probability` chance of a random step per tick), which
-  the escape circuit needs so there's real, ongoing pressure to react to
+  through the same `spawn_of()` path into `self.items`/`self.tiles` at
+  its own `spawn_rate`, bounded by `max_items`/`max_tiles`; mobs spawn
+  the same way into `self.mobs` via `spawn_mob_of()` and wander
+  (`mob_move_probability` chance of a random step per tick), which the
+  escape circuit needs so there's real, ongoing pressure to react to
   rather than a one-time, permanently-dodgeable placement (see
-  `decisions.md` #14, #15). `add_item_type(description)` (`decisions.md`
-  #27) is the player-driven item-creation entry point — registers a new
-  `ItemType`, capped at `MAX_ITEM_TYPES`. Picking up an item doesn't
-  restore hunger by a fixed amount — `apply_result()` runs its attribute
-  vector through the Result registry and writes whatever real deltas
-  come out, generically over `Channel` (`decisions.md` #28). A fly with
-  `stuck_ticks > 0` is forced to `STAY`, same pattern as the existing
-  `vulnerable_ticks_left` reproduction-cooldown mechanic. Flies
+  `decisions.md` #14, #15). `add_item_type`/`add_tile_type`/
+  `add_mob_type` (`decisions.md` #27, #30–#32) are the player-driven
+  creation entry points — each registers a new type, capped at
+  `MAX_ITEM_TYPES`/`MAX_TILE_TYPES`/`MAX_MOB_TYPES`; `add_mob_type`
+  additionally drops the call silently if `effect` isn't a real
+  `Effect` member. Picking up an item/tile doesn't restore hunger by a
+  fixed amount — `apply_result()` runs its attribute vector through the
+  Result registry and writes whatever real deltas come out (scaled by
+  `strength`, and by a per-tick fraction for a tile), generically over
+  `Channel` (`decisions.md` #28, #32); `resolve_mob_contact()` is the
+  authored equivalent for a created mob, sharing the same clamping
+  helper (`_write_channel_delta`) but never touching `blend_deltas()`.
+  A fly with `stuck_ticks > 0` is forced to `STAY`, same pattern as the
+  existing `vulnerable_ticks_left` reproduction-cooldown mechanic. Flies
   reproduce — a world-level stochastic event, not an agent decision,
   gated by hunger + a population-based `mate_availability` factor, with a
   real cost to the parent (hunger + a forced-`STAY` vulnerability
@@ -105,18 +127,18 @@ path.
   timed_out)`. A population of 1 makes reproduction structurally
   impossible (the formula), which is exactly the single-fly
   curriculum-training case — one class serves both, no separate
-  single-fly environment. `food_enabled` / `threats_enabled` flags mean
+  single-fly environment. `food_enabled` / `spider_enabled` flags mean
   training stages configure this one class differently rather than
   needing separate environment implementations.
 
 The `Observation` the environment exposes is an **anonymous** `nearby:
 list[Percept]` plus `hunger` (`decisions.md` #22/#25) — each `Percept`
 carries only a unit-norm attribute vector and relative position (`dx,
-dy, distance`), no name, type, or id. Items and threats go through the
-same `perceive()` call and are indistinguishable once they're percepts.
-Each entity's own `radius` decides visibility, a world-internal cutoff
-that stays on the world's side of the boundary. `hunger` is always
-visible (interoceptive, not sensed). This is the property
+dy, distance`), no name, type, or id. Items, tiles, and mobs go through
+the same `perceive()` call and are indistinguishable once they're
+percepts. Each entity's own `radius` decides visibility, a world-internal
+cutoff that stays on the world's side of the boundary. `hunger` is
+always visible (interoceptive, not sensed). This is the property
 `tests/test_item_contract.py` pins.
 
 Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
@@ -254,26 +276,31 @@ gets translated into at most one call against a fixed action registry —
 see `decisions.md` #16 for why each piece is split the way it is.
 
 - **`actions.py`** — the registry: `ActionSpec(name, description, fn,
-  takes_argument=False)` wrapping `Environment.increase_/
+  argument_schema=None)` wrapping `Environment.increase_/
   decrease_spider_rate`, `increase_/decrease_food_rate`, and (since
-  `decisions.md` #27) `create_item` — the first action with
-  `takes_argument=True`, wrapping `Environment.add_item_type` directly.
+  `decisions.md` #27, extended #30–#32) `create_item`/`create_tile`/
+  `create_mob` — each carrying a real `argument_schema` (a dict of
+  JSON-schema properties) instead of `None`; `create_mob`'s `effect`
+  field is a real enum, so an unsupported request has nowhere to bind.
   No LLM-specific code — doesn't know Claude or any other provider
   exists.
 - **`base.py`** — `WorldController`, a one-method interface
-  (`choose_action(request, actions) -> (action name, argument) or None`).
-  This is the entire swap point. `argument` only matters when that
-  action's `takes_argument` is True.
+  (`choose_action(request, actions) -> (action name, arguments dict) or
+  None`). This is the entire swap point. `arguments` is `{}` when that
+  action's `argument_schema` is `None`.
 - **`rule_based_controller.py`** — zero-dependency keyword-match backend,
   used to test the registry/`Environment` wiring for free before any real
   model is involved. Handles `create_item` the same crude way as
   everything else it does: a fixed trigger phrase (`"create item:"` etc.),
-  everything after it taken verbatim as the description.
+  everything after it taken verbatim as both name and description,
+  strength fixed at the midpoint. Deliberately doesn't cover
+  `create_tile`/`create_mob` — picking a real `effect` is a
+  language-understanding task, not a keyword match.
 - **`claude_controller.py`** — the reference LLM backend: real tool-use,
-  not free-text parsing. `create_item` is the first tool with a real
-  `input_schema` (a `description` string) instead of an empty one — the
+  not free-text parsing. `build_tool_definitions()` turns each action's
+  `argument_schema` directly into that tool's `input_schema` — the
   parameterized-tool-use path the controller was built to support from
-  the start, now actually exercised.
+  the start, now exercised by three real multi-field schemas.
 
 ## Data flow through one tick (per fly)
 

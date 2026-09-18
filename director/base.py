@@ -13,8 +13,9 @@ from .actions import ActionSpec
 
 class WorldController(ABC):
     @abstractmethod
-    def choose_action(self, request: str, actions: list[ActionSpec]) -> tuple[str, str | None] | None:
-        """Return (action name, argument) for one action in `actions` to
-        run for this request, or None if no action applies. `argument`
-        is only meaningful when that action's `takes_argument` is True
-        (decisions.md #27); pass None otherwise."""
+    def choose_action(self, request: str, actions: list[ActionSpec]) -> tuple[str, dict] | None:
+        """Return (action name, arguments) for one action in `actions`
+        to run for this request, or None if no action applies.
+        `arguments` is a dict of keyword arguments matching that
+        action's argument_schema (decisions.md #27, #30-#32); pass {}
+        when argument_schema is None."""

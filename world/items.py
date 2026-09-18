@@ -20,8 +20,16 @@ from __future__ import annotations
 import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    # Type-only: results.py already imports this module, so importing
+    # Effect here at runtime would cycle. MobType only needs the name for
+    # typing -- from __future__ import annotations (above) means the
+    # annotation itself is never evaluated at runtime.
+    from .results import Effect
 
 
 class ItemEncoder(ABC):
@@ -91,13 +99,18 @@ class NomicItemEncoder(ItemEncoder):
 class ItemType:
     """A registered item type: everything the world needs to keep
     spawning one kind of item. Not a grid entity itself -- see
-    world/entities.py's `Item` for a live spawned instance.
+    world/entities.py's `Item`/`Tile` for a live spawned instance. Used
+    for both (decisions.md #31): a tile is exactly this shape, spawning
+    through the same path, its only difference being what the world does
+    with the spawned instance afterwards (never removed on contact).
 
     Built-in content (food) and player-created types (decisions.md #27)
     are the same thing and spawn through the same path -- `name` exists
     only so `director/` has a handle for the built-in food rate it's
     allowed to tune. `attributes` is the prototype, encoded once at
-    registration; spawning only jitters it.
+    registration; spawning only jitters it. `strength` (decisions.md
+    #32) scales the resulting effect's overall magnitude only -- shape
+    and sign always come from `attributes`.
 
     Mutable on purpose: `spawn_rate` is exactly what director/'s
     increase_/decrease_food_rate actions adjust.
@@ -108,6 +121,30 @@ class ItemType:
     attributes: np.ndarray
     spawn_rate: float
     radius: float
+    strength: int
+
+
+@dataclass
+class MobType:
+    """A registered mob type -- the `ItemType` counterpart for
+    world/entities.py's `Mob` (decisions.md #31). `attributes` drives
+    perception only; a mob's actual effect comes entirely from
+    `effect`/`strength`, authored and read directly, never derived from
+    the vector the way an `ItemType`'s is (decisions.md #30) -- see
+    `world/results.py`'s `Effect`/`mob_effect_delta`.
+
+    `effect`/`strength` are `None` only for the one built-in case: the
+    spider, unconditional insta-kill on contact, unrelated to anything a
+    player can create. Every player-created `MobType` has both set.
+    """
+
+    name: str
+    description: str
+    attributes: np.ndarray
+    spawn_rate: float
+    radius: float
+    effect: "Effect | None" = None
+    strength: int | None = None
 
 
 def jitter(prototype: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:
