@@ -130,3 +130,14 @@ yet started (see "After that" below).
   rendering (`decisions.md` #19). The core Python game loop it was
   deferred until (reproduction mechanic + a live director loop) is now
   done (`decisions.md` #23) — unblocked, not yet started.
+- **Structure/effect split for items, threats, and tiles** — separating
+  *what moves/is consumed/occupies an area* (structure, discrete,
+  tool-selected) from *what it does to a fly* (effect, continuous,
+  description-driven), plus a new permanent "trait" effect tier
+  alongside today's transient `Channel` one. Brainstormed, not
+  designed, not started (`decisions.md` #29).
+- **Two-player "god vs devil" mode** — human vs computer or human vs a
+  friend, one growing the colony, one destroying it, same
+  instructions→world→learning loop multiplexed across two sources.
+  Noted for the future; multiplayer explicitly out of scope for now
+  (`decisions.md` #29).

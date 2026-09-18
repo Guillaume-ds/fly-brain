@@ -1312,3 +1312,98 @@ rejected for now — the flat-kwargs shape is what lets `curriculum.py`
 express a training stage as a plain dict, which is a documented choice
 (#9). Worth revisiting only if a stage ever needs to vary something the
 flat shape makes awkward.
+
+## 29. Item/threat/tile brainstorm: structure vs effect; a future two-player "god vs devil" mode
+
+**Context:** two forward-looking conversations, recorded together since
+the second reframes an open question the first left behind. Neither is
+implemented; both are vision, not a plan.
+
+**Item/threat/tile brainstorm.** The stated ambition is more "god user"
+control — different player-created threats, food that lets a fly evolve
+permanently (bigger reserves, maybe even a faster learning rate) rather
+than just heal — aimed at a feel somewhere between Minecraft (open,
+describable placement) and Spore (consequences that accumulate over a
+lifetime and across generations). The brainstorm's central move: what
+looked like one axis ("item vs threat") is actually two, and conflating
+them is what made the boundary feel awkward.
+
+- **Structure** — does it move, is it consumed, does it occupy a point
+  or an area. This is a simulation-loop question (which list it lives
+  in, what touches it each tick) and should stay a small, discrete,
+  *explicitly chosen* set of archetypes — picked by which director
+  action/tool gets called (`create_item` vs a future `create_threat` /
+  `create_tile`), not inferred from embedding similarity. Inferring
+  structure from a fuzzy score is riskier than inferring flavor from
+  one: getting it wrong doesn't just misjudge tone, it corrupts the
+  simulation.
+- **Effect** — what happens to a fly that touches it. This should stay
+  continuous and description-driven, the way it already is (#25), but
+  split into two tiers: **resource effects** (today's `Channel` deltas —
+  transient, bounded, never inherited) and a new **trait effects** tier
+  (permanent — max_hunger, max_health, maybe even the plasticity
+  circuit's own learning rate — inherited through the same prior-vs-live
+  split already built for plasticity gains, #22 part 3/#26). The two
+  tiers share one mechanism; they differ in whether the change resets or
+  becomes part of what the fly *is*.
+
+Consequence: instant-kill-on-contact stops needing to be its own
+mechanism and becomes just the extreme end of the damage scale — a
+threat *could* deal graded, survivable damage through the same registry
+a food item uses, without literally merging the `Threat` and `Item`
+classes (structure can stay separate while effect becomes shared). This
+reframes, but does not remove, the blocker already on record: under the
+current stub encoder a spider reads as more food-like than damage-like
+(verified in the #28 review), so nothing lethal can safely draw on the
+effect vocabulary until the real semantic encoder is in place. It was
+never really "should `Threat` become `Item`" — it's "is the encoder
+trustworthy enough to let any mobile thing's danger be description-
+driven," one gate, not two.
+
+Threat *behavioral* variety (stalks vs wanders vs sits-and-hits-hard vs
+swarms) is a structure question too, and would reuse the same registry
+shape as Results — a small fixed set of archetypes — rather than a new
+mechanism. Danger *perception* already varies by description today, for
+free, via the existing `danger_vector` similarity (#24) — a
+scarier-described threat already provokes a stronger flee response,
+before any of this is built.
+
+Real risk flagged, not solved: permanent trait grants compound in a way
+transient heals don't. A single overpowered description could make the
+colony unkillable, which breaks the premise. Scale constants for trait
+effects will need to be deliberately smaller/rarer than resource-effect
+scales — a tuning question for whenever this is built, not now.
+
+One boundary reaffirmed, not changed: the player still never edits a
+fly directly. Evolutionary food is a placed, describable thing; whether
+a fly ever benefits from it is still a consequence of the fly's own
+movement and luck, same as everything else in the world today.
+
+**A future two-player "god vs devil" mode.** For better mechanics: two
+players — human vs computer, or human vs a friend — one ("god") trying
+to grow/protect the colony, one ("devil") trying to wipe it out. Noted
+here; **explicitly not started, multiplayer is out of scope for now.**
+
+The reason this doesn't need a new architecture, only a future one:
+the loop stays exactly what it already is — *instructions → affect the
+world in real time → flies learn from it and benefit/suffer* — just
+multiplexed across two instruction sources with opposite objectives
+instead of one. Nothing about `Environment`, `director/`, or the live
+loop is single-player-shaped; the registry-driven, LLM-translated
+control surface was already built generic enough to have more than one
+source of instructions pointed at it.
+
+This also gives the still-open "what does winning mean" question
+(`wiki/loop.md`) a natural answer for free, rather than needing an
+invented single-player score: god wins if the colony survives/grows past
+some bar, devil wins if it goes extinct. Worth remembering when that
+question is actually decided, since it may make the two questions one
+decision instead of two.
+
+Open questions, deliberately left open: human-vs-computer needs an AI
+playing one role convincingly (itself an LLM-controller instance,
+presumably reusing `WorldController`), and human-vs-human needs a
+session/turn model that doesn't exist yet; whether both sides share one
+action registry or get asymmetric ones (a "devil" registry biased toward
+harm, a "god" one toward relief) is undecided. None of this blocks
+anything currently planned before the frontend.

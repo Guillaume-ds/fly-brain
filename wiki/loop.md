@@ -80,7 +80,11 @@ downstream of it means anything to a player yet.
   player (a score based on how long survival took? how much the LLM had
   to invent? something else?) — open design question, not started, and
   probably worth deciding *before* the frontend renders anything final,
-  since the UI would need to show it
+  since the UI would need to show it. A future two-player "god vs devil"
+  mode (`decisions.md` #29) would answer this for free — god wins if the
+  colony survives/grows, devil wins if it goes extinct — worth
+  remembering when this gets decided, since it may fold into one
+  decision instead of two
 
 **Logic for testing:** contract = `colony_extinct` is `True` if and only
 if `Environment.flies` is empty, and it's `True` on the tick population
