@@ -22,6 +22,7 @@ from director.base import WorldController
 from director.claude_controller import ClaudeController
 from director.rule_based_controller import RuleBasedController
 from fly_brain.agent import build_escape_template
+from fly_brain.plasticity import build_plasticity_template
 from world.env import Environment
 from world.items import HashingItemEncoder
 
@@ -96,6 +97,7 @@ def run_live(
     controller: WorldController,
     input_queue: "queue.Queue[str | None]",
     ticks_per_second: float,
+    audit_every: int = 50,
 ) -> None:
     actions = build_registry(colony.env)
     tick_interval = 1.0 / ticks_per_second
@@ -114,6 +116,12 @@ def run_live(
             logger.info(
                 "tick %4d  population=%3d  deaths=%s  births=%d",
                 colony.env.tick, colony.population, list(result.deaths.values()), len(result.births),
+            )
+        if colony.env.tick % audit_every == 0 and colony.population:
+            summary = colony.plasticity_summary()
+            logger.info(
+                "tick %4d  plasticity audit: mean gain drift=%.3f, reinforcement events=%d",
+                colony.env.tick, summary["mean_gain_drift"], summary["total_reinforcement_events"],
             )
         if result.colony_extinct:
             logger.info("Colony extinct at tick %d", colony.env.tick)
@@ -148,8 +156,9 @@ def main() -> None:
     args = parse_args()
 
     encoder = HashingItemEncoder()
-    template = build_escape_template(encoder)
-    gains = load_starting_gains(template, args.checkpoint)
+    escape_template = build_escape_template(encoder)
+    plasticity_template = build_plasticity_template(encoder)
+    gains = load_starting_gains(escape_template, args.checkpoint)
 
     env = Environment(
         initial_population=args.initial_population,
@@ -158,7 +167,9 @@ def main() -> None:
         encoder=encoder,
         seed=args.seed,
     )
-    colony = Colony(env, template, gains, mutation_sigma=args.mutation_sigma, seed=args.seed)
+    colony = Colony(
+        env, escape_template, plasticity_template, gains, mutation_sigma=args.mutation_sigma, seed=args.seed,
+    )
     controller = build_controller(args.controller)
 
     input_queue: "queue.Queue[str | None]" = queue.Queue()

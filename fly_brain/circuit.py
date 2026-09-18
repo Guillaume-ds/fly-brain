@@ -132,6 +132,16 @@ class Circuit:
         self.spikes_prev = spikes
         return spikes
 
+    def pre_neuron_of_edge(self, edge_indices: np.ndarray) -> np.ndarray:
+        """The pre-synaptic neuron index for each given edge index.
+        Exposed specifically for the dopamine-gated plasticity rule
+        (fly_brain/plasticity.py), which -- unlike ES's uniform
+        whole-vector perturbation -- needs real per-edge structural
+        identity to apply a local Hebbian update. Everything else about
+        edge structure stays private on purpose (see class docstring).
+        """
+        return self._edge_pre[edge_indices]
+
     def get_params(self) -> np.ndarray:
         return self.synaptic_gain.copy()
 

@@ -928,3 +928,159 @@ sides read attribute vectors in the same space.
 DAN circuit + dopamine-gated plasticity rule (phase 3); `training/
 colony.py` integration, including the prior-vs-live gain split on
 reproduction (phase 4).
+
+## 26. #22 implementation, phases 3–4: the KC/MBON/DAN plasticity circuit, `Colony` integration, auditability
+
+**Context:** the last, biggest piece of #22 — a second real circuit
+implementing lifetime, dopamine-gated learning, wired into `Colony`
+alongside the frozen escape circuit. The user asked explicitly to be
+able to audit and see learning/improvement over a fly's life, so
+observability was a first-class requirement, not an afterthought.
+
+**Circuit construction** (`fly_brain/plasticity.py`,
+`build_plasticity_blueprint`/`build_plasticity_template`): the real
+populations (4,064 KCs / 97 MBONs / 354 DANs, verified in #22) are far
+too large to simulate per-tick, per-fly across a live colony, so the
+circuit is built from a bounded, real subgraph rather than the full
+population — and rather than `fly_brain/circuit.py`'s existing
+`build_circuit()`, which expands outward hop-by-hop under a *global*
+edge budget (built for a different problem: discovering a path from one
+seed type to a motor neuron). That approach was tried first and
+produced 4,618 neurons (DANs broadcast far too broadly in the real data
+to cap globally) — a new, purpose-built extraction was needed instead:
+top-100 real KCs by total real KC→MBON weight (not an arbitrary
+subsample — the KCs whose real output matters most for this circuit),
+their real top-20 targets each (auto-discovering the MBON population,
+50 neurons, rather than guessing it), then every DAN with a real edge
+into that KC/MBON universe, each capped to its own top-30 edges
+*restricted to that universe* (not DAN's globally-broadest targets,
+which mostly point elsewhere). Result: 481 real neurons, 6,442 real
+edges, 1,000 plastic KC→MBON synapses, 300 PAM + 31 PPL/PPM DANs — a
+real, well-connected, computationally tractable subgraph.
+
+`Circuit` gained one small public method, `pre_neuron_of_edge()` — the
+plasticity rule needs real per-edge structural identity (which KC feeds
+which edge) to apply a local update, unlike ES's uniform whole-vector
+perturbation, which never needed to know. Everything else about edge
+structure stays private, per `Circuit`'s existing design.
+
+**MBON approach/avoid split is an explicit, documented simplification**
+(`split_mbon_valence`): there's no real downstream-of-MBON connectivity
+in this bounded subgraph to derive functional roles from data, and
+mapping the dataset's numeric MBON type codes to published literature
+roles is out of scope for verification here. The split is structural
+(sorted body id parity), not a biological claim.
+
+**Two real bugs found and fixed empirically, not assumed away** — both
+matter for the design's actual correctness, not just code hygiene:
+
+1. **The textbook depression-only Hebbian rule doesn't work with a
+   direct-spike-readout MBON.** The real mushroom body rule depresses
+   whichever KC→MBON synapses were just active, full stop — that shifts
+   real fly behavior because of real anatomy *downstream* of MBON that
+   isn't part of this bounded subgraph. Applied uniformly here (where
+   MBON output is read directly as approach-minus-avoid), it depresses
+   both pathways equally for the same active KCs and never moves the
+   difference — confirmed directly: net valence stayed frozen even as
+   `gain_drift` climbed steadily. Fixed by making the rule direction-
+   aware: reward potentiates the approach pathway and depresses avoid
+   for the active KCs; punishment does the reverse. This is a deliberate
+   adaptation to the simplified readout, not the textbook rule, and it's
+   documented as such in `PlasticityAgent.reinforce()`.
+
+2. **Uniform current injected into a DAN population saturates instead of
+   grading with magnitude.** Injecting the same current into every
+   neuron in a group makes that group's response an all-or-nothing
+   switch — any reward/punishment above a tiny floor makes the *entire*
+   group spike, so `pam_signal - ppl_signal` collapses to ~0 regardless
+   of true magnitude. Confirmed directly in a live `Colony` run: a real
+   +47 hunger pickup produced **zero** reinforcement events. Fixed with
+   a fixed, per-neuron random gain (`pam_gain`/`ppl_gain`, `Uniform(0.01,
+   1.0)`, drawn once at template-build time) — turns the population into
+   a genuine graded rate code (verified: PAM spike fraction 0.0 → 0.81 →
+   0.97 → 1.0 as reward goes 1 → 5 → 20 → 100, a smooth curve instead of
+   a step function).
+
+**Auditability** (the explicit ask): `PlasticityAgent.probe(attributes)`
+is a read-only diagnostic — net valence (approach − avoid **membrane
+potential**, not spikes; see below) this agent's *current* gains would
+produce for a given vector, with zero side effects (a disposable circuit
+copy is stepped, the live agent's own state is never touched). Call it
+with the same vector at intervals through a fly's life to see a learning
+curve. `gain_drift()` is a cheap scalar summary (L2 distance between
+current and inherited-prior KC→MBON gains). `Colony.plasticity_summary()`
+gives a population-level view (mean gain drift, total reinforcement
+events); `run_colony()`/`run_live()` now log it periodically (every 50
+ticks) rather than only at the end, since a colony that goes extinct
+would otherwise lose the whole record the moment its learning flies die.
+
+**A third empirical correction, found while building the audit
+tooling:** `probe()`'s readout was originally spike-count-based
+(approach spikes − avoid spikes), matching the plain English of #22
+part 2 ("MBON output ... spikes"). Directly comparing it against a
+membrane-potential-based readout on the same reinforcement sequence
+showed the spike-count version frozen at exactly 0.0 for ten consecutive
+exposures while `gain_drift` climbed the whole time — a binary spike
+count is too coarse to reflect gradual synaptic change tick to tick.
+The membrane-potential version tracked the same learning smoothly (0.29
+→ 3.82). Switched both the audit probe and the live behavioral readout
+(`_mbon_valence`) to membrane potential; the circuit's own internal
+spiking dynamics (KC, DAN, and MBON's own spike-or-not state carried
+into the next tick) are unchanged, only what gets *read out* differs.
+Added a small deadzone (`VALENCE_DEADZONE = 0.1`) so continuous-valued
+noise near zero doesn't cause constant twitchy movement, since
+`valence == 0.0` (safe for the old binary readout) almost never holds
+for a real-valued one.
+
+**`Colony` integration** (`training/colony.py`): each fly now has both
+an `EscapeAgent` and a `PlasticityAgent`. Each tick: the plasticity
+circuit senses and decides *every* tick regardless of outcome (its
+eligibility trace has to keep running even on ticks the fly actually
+fled instead); the escape circuit's `decide()` (added to `EscapeAgent`
+alongside the existing `act()`) returns `None` when `TTMn` doesn't spike
+rather than defaulting to `STAY`, so `Colony` can distinguish "no escape
+override" from "chose to stay" and fall through to the plasticity
+circuit's own decision — the override rule from #5/#22, now concretely
+wired. Real state is snapshotted before `env.step()` and diffed after
+for every survivor, and that real `Δhunger/Δhealth/Δstuck_ticks` (never
+a percept similarity score) is what `reinforce()` is called with —
+`Environment` itself has no idea `fly_brain` exists; `Colony` computes
+the diff itself rather than `Environment` exposing a reward-shaped API.
+On birth, escape genome inherits as before (#21); plasticity genome
+inherits from `parent.prior_gains` (what the parent was *born* with)
+plus mutation — never `parent.get_params()` (what the parent's synapses
+drifted to during its own life), per #22 part 3. Verified directly:
+artificially drifted a parent's live gains away from its prior, then
+confirmed a spawned offspring's gains matched the prior exactly and
+differed from the drifted live gains.
+
+**Verified, end to end:**
+- Isolated reward learning curve (repeated `+47 hunger` exposures to the
+  same item): valence 0.29 → 3.82 → plateau, `gain_drift` climbing
+  steadily, `reinforcement_events` incrementing correctly.
+- Isolated punishment learning curve (repeated `-20 health` exposures):
+  valence 1.02 → -3.15, correctly trending negative (avoidance).
+  Slower to move than reward — expected, the PPL/PPM population (31
+  neurons) is much smaller than PAM (300), so its mean needs more
+  consistent activation to shift by the same amount.
+- Generalization: reinforcing only "apple" produced a smaller positive
+  shift in a never-reinforced, wording-similar "pear" than in apple
+  itself, and a much smaller shift than nothing at all would — a real
+  transfer gradient, though noisier than a real semantic encoder would
+  give (the stub is explicitly orthographic, not semantic, #24).
+- Full live `Colony` run (`training/colony_run.py`): traced a real food
+  pickup mid-run, confirmed `reinforce()` fired with the correct deltas
+  and `gain_drift`/`reinforcement_events` updated on the correct fly's
+  agent immediately.
+- Offspring inheritance test (above).
+- Regression: ES training (`training/run.py`) and `training/live_run.py`
+  both re-verified end to end after the `EscapeAgent.decide()`/`act()`
+  refactor — unaffected.
+
+**Not built in this pass, left open:** an ES-style (or other)
+evolutionary process specifically for the plasticity circuit's *prior*
+gains/hyperparameters (#22 part 3 says "and/or" — it's currently just
+untrained, gain=1.0, same fallback as the escape circuit); a dedicated
+audit CLI/visualization beyond the periodic log lines (the hooks
+`probe()`/`gain_drift()`/`plasticity_summary()` are there for one to be
+built on top of).

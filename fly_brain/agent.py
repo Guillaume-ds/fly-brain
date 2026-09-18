@@ -127,7 +127,13 @@ class EscapeAgent:
     def reset(self) -> None:
         self.circuit.reset()
 
-    def act(self, obs: Observation) -> Action:
+    def decide(self, obs: Observation) -> Action | None:
+        """None means "no escape override this tick" (TTMn didn't spike)
+        -- distinct from Action.STAY, which is a real decision. Lets a
+        combined brain (training/colony.py, decisions.md #26) fall
+        through to the plasticity circuit's own decision instead of
+        forcing STAY whenever the escape reflex has nothing to say.
+        """
         flee_dx, flee_dy, danger_strength = sense_danger(obs.nearby, self.danger_vector)
 
         current = np.zeros(self.circuit.n)
@@ -135,8 +141,12 @@ class EscapeAgent:
         spikes = self.circuit.step(current)
 
         if not spikes[self.motor_idx].any():
-            return Action.STAY
+            return None
         return flee_direction(flee_dx, flee_dy)
+
+    def act(self, obs: Observation) -> Action:
+        decision = self.decide(obs)
+        return decision if decision is not None else Action.STAY
 
     def get_params(self) -> np.ndarray:
         return self.circuit.get_params()

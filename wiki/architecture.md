@@ -128,6 +128,36 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
   `sense_danger()` replaced a named `threat_signal` field once
   `Observation` became anonymous. No foraging behavior yet — a fly only
   eats what it happens to wander into.
+- **`plasticity.py`** (`decisions.md` #22/#26) — the second real circuit:
+  Kenyon Cells (KC) → Mushroom Body Output Neurons (MBON), gated by
+  Dopaminergic Neurons (DAN), implementing lifetime, dopamine-gated
+  Hebbian plasticity, fully separate from the frozen escape circuit
+  above. Built from a bounded, real subgraph (481 neurons, 6,442 edges,
+  1,000 plastic KC→MBON synapses) rather than the full ~4,500-neuron
+  real population, which is computationally impractical per-tick,
+  per-fly: the top-100 real KCs by total real KC→MBON weight, their
+  real top-20 targets each (auto-discovering 50 real MBONs), and every
+  DAN with a real edge into that universe (300 PAM=reward-coding, 31
+  PPL/PPM=punishment-coding). `PlasticityAgent.sense_and_decide()` runs
+  every tick regardless of outcome (its KC eligibility trace has to keep
+  running even on ticks the escape circuit overrides the actual move);
+  `reinforce(deltas)` takes the real `Δhunger/Δhealth/Δstuck_ticks` a
+  tick produced (never a percept similarity score directly) and applies
+  a direction-aware Hebbian update — reward potentiates the approach
+  pathway and depresses avoid for the KCs that were active, punishment
+  the reverse (a deliberate adaptation of the textbook depression-only
+  rule to fit this circuit's direct-spike-readout MBON, not the
+  biological rule verbatim). DAN stimulus uses a fixed per-neuron random
+  gain rather than uniform current — needed for the DAN population's
+  spike fraction to actually grade with magnitude instead of saturating
+  all-or-nothing (found empirically, `decisions.md` #26). Net valence
+  (approach − avoid) reads MBON **membrane potential**, not spike count
+  — also found empirically: spike count is too coarse to track gradual
+  synaptic change tick to tick. `probe()` is a read-only diagnostic (net
+  valence for a given attribute vector, zero side effects) and
+  `gain_drift()` a cheap "how much has this fly learned" scalar — the
+  auditability hooks built in per an explicit ask; see `Colony` below
+  for how they surface at the population level.
 - **`analyze.py` / `simulate.py`** — the original standalone
   exploration/demo commands (`python -m fly_brain analyze|simulate`),
   independent of the survival-game project; still useful for poking at the
@@ -143,12 +173,27 @@ Action space is 5 discrete moves: `STAY, UP, DOWN, LEFT, RIGHT`.
 - **`run.py`** — CLI (`python -m training.run --stage 1`); checkpoints to
   `training/checkpoints/` (gitignored).
 - **`colony.py`** — `Colony` glues `Environment`'s multi-fly reproduction
-  mechanic to real `fly_brain` circuits: `dict[fly_id, EscapeAgent]`, one
-  per living fly. Each tick every fly acts via its own agent; each birth
-  gets a new agent whose genome is the parent's `get_params()` plus
-  Gaussian noise (`mutation_sigma`); each death deletes that fly's agent.
-  `load_starting_gains()` seeds the colony from a trained ES checkpoint
-  when available, or untrained (gain=1.0) otherwise.
+  mechanic to real `fly_brain` circuits: every living fly has both an
+  `EscapeAgent` and a `PlasticityAgent` (`decisions.md` #26). Each tick,
+  the plasticity circuit always senses and decides first (its eligibility
+  trace must keep running regardless of outcome); the escape circuit's
+  `decide()` returns `None` when it has no override (`TTMn` didn't
+  spike), and only then does the plasticity circuit's own decision get
+  used — the freeze+override rule from `decisions.md` #5, concretely
+  wired. `Colony` snapshots each fly's real state before `env.step()`
+  and diffs it after for every survivor, feeding that real
+  `Δhunger/Δhealth/Δstuck_ticks` to `reinforce()` — `Environment` itself
+  never knows `fly_brain` exists or that "reward" is a concept.
+  On birth: the escape genome inherits the parent's `get_params()` plus
+  Gaussian noise, as before; the plasticity genome inherits the parent's
+  `prior_gains` (what *it* was born with) plus mutation — never the
+  parent's own lifetime-drifted live gains, per `decisions.md` #22 part
+  3. `plasticity_summary()` gives a population-level audit snapshot
+  (mean gain drift, total reinforcement events). `load_starting_gains()`
+  seeds the escape circuit from a trained ES checkpoint when available,
+  or untrained (gain=1.0) otherwise; the plasticity circuit currently
+  always starts untrained (gain=1.0) — no ES-style training loop exists
+  yet for its prior, see roadmap.md.
 - **`colony_run.py`** — CLI (`python -m training.colony_run`) that runs a
   colony headlessly and logs population/births/deaths — a cheap way to
   watch it work before the real frontend exists, not the live game loop

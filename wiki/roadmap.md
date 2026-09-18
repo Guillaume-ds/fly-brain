@@ -21,7 +21,8 @@ see #13 for why that was dropped.
 | Stage 1 training run (clean escape) | **unblocked and verified** — real `population_reward_std` every iteration (`decisions.md` #15); 15-iteration smoke test only, a longer real run is still future work |
 | `director/` — swappable LLM world-controller layer | done; registry → rule-based controller → `Environment` verified end to end; `ClaudeController` built to spec but **not tested live** (no API credentials in this environment) — see `decisions.md` #16 |
 | Reproduction mechanic — multi-fly `Environment`, stochastic trigger, parent cost | **done, tested** (`decisions.md` #20) |
-| `training/colony.py` — per-fly circuits/genomes, offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21) — real natural birth observed in a full run, colony driven by an actual trained circuit end to end |
+| `training/colony.py` — per-fly circuits/genomes (escape + plasticity), offspring genome creation, headless colony runner | **done, tested** (`decisions.md` #21, #26) — real natural birth observed in a full run, colony driven by actual trained/learning circuits end to end |
+| `fly_brain/plasticity.py` — KC/MBON/DAN circuit, dopamine-gated lifetime plasticity, audit hooks | **done, tested** (`decisions.md` #26) — real learning curves verified (reward, punishment, generalization), wired into `Colony`, prior-vs-live gain split verified on reproduction |
 | No foraging behavior — flies only eat food they wander into by luck | known limitation, not a bug (`decisions.md` #21); stage 3's job |
 | Live game loop (`training/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
 | Stage 2 / stage 3 (noisy escape, forage transfer) | not started |
@@ -66,10 +67,29 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
    stimulus (baseline 65.3 → 80.0 fitness) and verified the full
    pipeline live in `colony_run.py` (real food pickups changing
    hunger/stuck_ticks were traced during an actual run).
-9. **Phase 3: the KC/MBON/DAN circuit + dopamine-gated plasticity rule**
-   (`fly_brain/`) — not started. Next up.
-10. Phase 4: `training/colony.py` integration (both circuits per fly,
-    prior-vs-live gain split on reproduction) — not started.
+9. ~~Phase 3: the KC/MBON/DAN circuit + dopamine-gated plasticity rule~~
+   done, see `decisions.md` #26. Real, bounded 481-neuron subgraph (100
+   KCs by real KC→MBON weight, 50 MBONs, 300 PAM + 31 PPL/PPM DANs);
+   two real bugs found and fixed empirically along the way (a uniform
+   DAN current saturates instead of grading with magnitude; the
+   textbook depression-only rule doesn't move a direct-spike-readout
+   MBON). Auditability hooks (`probe()`, `gain_drift()`,
+   `plasticity_summary()`) built in from the start per an explicit ask;
+   real learning curves verified for both reward and punishment.
+10. ~~Phase 4: `training/colony.py` integration~~ done, see
+    `decisions.md` #26. Both circuits run per fly; escape overrides
+    plasticity only when `TTMn` actually spikes; offspring inherit the
+    plasticity prior, never the parent's own lifetime-drifted gains
+    (verified directly).
+
+#22 is now fully implemented (phases 1–4). Remaining, not yet started:
+an evolutionary process for the plasticity circuit's own prior/
+hyperparameters (currently untrained, gain=1.0); a dedicated audit CLI/
+visualization on top of the hooks now in place; the LLM-driven,
+player-extensible item-creation system discussed after #22 was first
+completed (parameterized director actions + a dynamic item registry in
+`Environment`, replacing the two fixed food/threat slots) — design not
+yet started.
 
 The frontend is a separate, independent track, also unblocked and not
 yet started (see "After that" below).

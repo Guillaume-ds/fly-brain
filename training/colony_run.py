@@ -7,6 +7,7 @@ import logging
 import pathlib
 
 from fly_brain.agent import build_escape_template
+from fly_brain.plasticity import build_plasticity_template
 from world.env import Environment
 from world.items import HashingItemEncoder
 
@@ -34,8 +35,9 @@ def main() -> None:
     args = parse_args()
 
     encoder = HashingItemEncoder()
-    template = build_escape_template(encoder)
-    gains = load_starting_gains(template, args.checkpoint)
+    escape_template = build_escape_template(encoder)
+    plasticity_template = build_plasticity_template(encoder)
+    gains = load_starting_gains(escape_template, args.checkpoint)
 
     env = Environment(
         initial_population=args.initial_population,
@@ -44,11 +46,18 @@ def main() -> None:
         encoder=encoder,
         seed=args.seed,
     )
-    colony = Colony(env, template, gains, mutation_sigma=args.mutation_sigma, seed=args.seed)
+    colony = Colony(
+        env, escape_template, plasticity_template, gains, mutation_sigma=args.mutation_sigma, seed=args.seed,
+    )
 
     logger.info("Starting colony: population=%d, max_population=%d", colony.population, args.max_population)
     history = run_colony(colony, args.max_ticks)
     logger.info("Final population: %d after %d ticks (peak: %d)", history[-1], len(history) - 1, max(history))
+    summary = colony.plasticity_summary()
+    logger.info(
+        "Plasticity audit: mean gain drift=%.3f, total reinforcement events=%d",
+        summary["mean_gain_drift"], summary["total_reinforcement_events"],
+    )
 
 
 if __name__ == "__main__":
