@@ -138,6 +138,7 @@ class ColonyStepResult:
     births: dict[int, int]  # new fly id -> parent fly id
     colony_extinct: dict[str, bool]  # owner -> whether THEIR flies are all gone (decisions.md #34) -- the game ends for a player when theirs is True, not globally
     timed_out: bool
+    effects: dict[int, dict[Channel, float]]  # fly id -> channel -> total EFFECT delta this tick (decisions.md #37) -- items/tiles/mobs/fly-combat/kill-transfer, NEVER the constant hunger decay. This, not a before/after state diff, is what Colony.step() reinforces on.
 
 
 class Environment:
@@ -489,6 +490,7 @@ class Environment:
         self.items = []
         self.tiles = []
         self.flies = []
+        self._tick_effects: dict[int, dict[Channel, float]] = {}  # decisions.md #37
         self.register_owner(DEFAULT_OWNER)
         for owner in self.owners:
             self.energy[owner] = self.starting_energy
@@ -507,6 +509,7 @@ class Environment:
         if missing:
             raise ValueError(f"missing action for living flies: {missing}")
 
+        self._tick_effects = {}  # decisions.md #37 -- reset each tick; decay below never populates this
         self.move_flies(actions)
         self.tick += 1
         for fly in self.flies:
@@ -529,6 +532,7 @@ class Environment:
             births=births,
             colony_extinct={owner: not any(f.owner == owner for f in self.flies) for owner in self.owners},
             timed_out=self.tick >= self.max_ticks,
+            effects=self._tick_effects,
         )
 
     def clamp_to_grid(self, x: int, y: int) -> Position:
@@ -666,7 +670,7 @@ class Environment:
                     continue
                 if fly.position.x == mob.position.x and fly.position.y == mob.position.y:
                     channel, delta = mob_effect_delta(mob.effect, mob.strength, self.channel_limits)
-                    _write_channel_delta(fly, channel, delta, self.channel_limits[channel])
+                    self._apply_channel_delta(fly, channel, delta, self.channel_limits[channel])
 
     def resolve_fly_combat(self) -> None:
         """Contact between different-owner flies: a small, fixed,
@@ -682,8 +686,8 @@ class Environment:
                 if fly.owner == other.owner:
                     continue
                 if fly.position.x == other.position.x and fly.position.y == other.position.y:
-                    _write_channel_delta(fly, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
-                    _write_channel_delta(other, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
+                    self._apply_channel_delta(fly, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
+                    self._apply_channel_delta(other, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
 
     def resolve_kill_transfers(self) -> None:
         """When a fly is about to die (health <= 0, whatever the cause)
@@ -691,10 +695,14 @@ class Environment:
         hunger transfers to them, split evenly -- a real hunger delta,
         the same tick as the death, flowing through the existing reward
         mechanism untouched (decisions.md #35): `reward = max(0,
-        delta_hunger)` in fly_brain/plasticity.py needs no change at all.
-        Must run after resolve_fly_combat() (so combat's damage is
-        already reflected) and before resolve_deaths() (so the dying
-        fly's hunger/position are still here to read).
+        delta_hunger)` in fly_brain/plasticity.py needs no change at
+        all. This delta is now tracked as an EFFECT (decisions.md #37),
+        so it reaches reinforce() cleanly rather than possibly being
+        diluted below zero by that same tick's hunger decay, the way a
+        net-state-diff approach would risk. Must run after
+        resolve_fly_combat() (so combat's damage is already reflected)
+        and before resolve_deaths() (so the dying fly's hunger/position
+        are still here to read).
         """
         for fly in self.flies:
             if fly.health > 0:
@@ -710,7 +718,7 @@ class Environment:
                 continue
             transfer = fly.hunger * KILL_TRANSFER_FRACTION / len(rivals_here)
             for rival in rivals_here:
-                _write_channel_delta(rival, Channel.HUNGER, transfer, self.channel_limits[Channel.HUNGER])
+                self._apply_channel_delta(rival, Channel.HUNGER, transfer, self.channel_limits[Channel.HUNGER])
 
     def apply_result(self, fly: Fly, attributes: np.ndarray, strength: int, tick_fraction: float = 1.0) -> None:
         """The real mechanical effect of an item/tile on a fly -- a
@@ -728,7 +736,31 @@ class Environment:
         """
         magnitude = strength_magnitude(strength) * tick_fraction
         for channel, delta in blend_deltas(attributes, self.results).items():
-            _write_channel_delta(fly, channel, delta * magnitude, self.channel_limits[channel])
+            self._apply_channel_delta(fly, channel, delta * magnitude, self.channel_limits[channel])
+
+    def _apply_channel_delta(self, fly: Fly, channel: Channel, delta: float, limit: int) -> None:
+        """The one place a Channel delta actually gets written to a Fly
+        -- shared by every effect source (item/tile pickup, mob contact,
+        fly combat, kill-transfer) so the clamping logic exists exactly
+        once, and so every effect is tracked in `self._tick_effects`
+        (decisions.md #37) the same way, with nothing able to apply an
+        effect without also recording it.
+
+        `self._tick_effects` is what `ColonyStepResult.effects` exposes:
+        the reward/punishment signal `Colony` reinforces on comes from
+        THIS, never from a before/after diff of a fly's net state. The
+        constant per-tick hunger decay (`Environment.step()`) never goes
+        through here on purpose -- it isn't an effect of anything the
+        fly touched, and mixing it in is exactly what silently zeroed or
+        diluted real (especially weak) item effects before this entry:
+        a true food pickup of +0.4 hunger, netted against -1 decay in
+        the same tick, used to read as -0.6 -- `max(0, -0.6) == 0`, no
+        reward at all for a real, if mild, food pickup.
+        """
+        current = getattr(fly, channel.value)
+        setattr(fly, channel.value, int(min(limit, max(0, round(current + delta)))))
+        self._tick_effects.setdefault(fly.id, {})
+        self._tick_effects[fly.id][channel] = self._tick_effects[fly.id].get(channel, 0.0) + delta
 
     def resolve_reproduction(self) -> dict[int, int]:
         """See wiki/decisions.md #20 for the formula and why it's shaped
@@ -835,13 +867,6 @@ class Environment:
         return Observation(nearby=nearby, hunger=fly.hunger / self.max_hunger)
 
 
-def _write_channel_delta(fly: Fly, channel: Channel, delta: float, limit: int) -> None:
-    """The one place a Channel delta actually gets written to a Fly --
-    shared by apply_result() (item/tile) and resolve_mob_contact() (mob)
-    so the clamping logic exists exactly once.
-    """
-    current = getattr(fly, channel.value)
-    setattr(fly, channel.value, int(min(limit, max(0, round(current + delta)))))
 
 
 def clamp_rate(rate: float) -> float:

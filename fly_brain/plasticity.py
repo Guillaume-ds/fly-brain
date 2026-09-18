@@ -254,11 +254,17 @@ class PlasticityAgent:
         return Action.DOWN if dy > 0 else Action.UP
 
     def reinforce(self, deltas: dict[Channel, float]) -> None:
-        """Call once per tick with the REAL state deltas that tick
-        produced (world/results.py's blend, diffed by Colony) -- never
-        from a percept's similarity score directly. That's the rule that
-        keeps this consistent with decisions.md #22 part 2/5: the fly is
-        reinforced only by what actually happened to it.
+        """Call once per tick with the REAL effect deltas that tick
+        produced -- `Environment`'s own accounting of what items/tiles/
+        mobs/fly-combat/kill-transfer actually did
+        (`ColonyStepResult.effects`, decisions.md #37), never a
+        percept's similarity score directly, and never a before/after
+        diff of a fly's net state (that would mix in the constant
+        per-tick hunger decay, which isn't an effect of anything the fly
+        touched and used to silently zero out or dilute real, especially
+        weak, item effects -- decisions.md #28, #37). That's the rule
+        that keeps this consistent with decisions.md #22 part 2/5: the
+        fly is reinforced only by what actually happened to it.
 
         The textbook mushroom-body rule is depression-only (dopamine
         always weakens whichever KC->MBON synapses were just active);

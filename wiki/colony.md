@@ -114,20 +114,31 @@ internal correctness.
 
 **What it is:** real consequences (hunger up, health down) drive real
 reward/punishment signaling that locally rewires the valence circuit —
-never told what's good or bad, only what happened.
+never told what's good or bad, only what happened. That signal is now
+specifically the *effect* of what touched the fly — an item, tile, mob,
+or another fly — never a whole-tick net state diff, which used to
+silently net a real effect against that same tick's constant hunger
+decay (`decisions.md` #37).
 
 **Where we stand:** built and tested, including real learning curves
 for both reward and punishment, and generalization to similar-but-
-different items (`decisions.md` #22 part 2, #26).
+different items (`decisions.md` #22 part 2, #26). Effect-attribution
+fixed a real signal-quality bug (#37): a weak but genuine food pickup
+could previously net to a negative number against decay and produce
+*zero* reward — `ColonyStepResult.effects` isolates it now.
 
 **What's left:**
 - done recently: two real bugs found and fixed while verifying this —
   a uniform DAN current that saturated instead of grading with
   magnitude, and a depression-only Hebbian rule that never moved a
-  direct-spike-readout MBON (#26)
-- next: nothing currently planned for the mechanism itself; a real
-  semantic encoder (see world.md) would make *what* gets learned more
-  meaningful without changing *how* learning works
+  direct-spike-readout MBON (#26); effect-attributed reward, replacing
+  a whole-tick state diff that diluted weak effects with decay (#37)
+- next: whether hunger *loss* itself (decay, or a `starve`-effect mob)
+  should carry its own punishment signal remains open (`decisions.md`
+  #28, #37) — attribution is now correct, but nothing yet gives a fly a
+  reason to actively search for food rather than stumble into it; a
+  real semantic encoder (see world.md) would make *what* gets learned
+  more meaningful without changing *how* learning works
 
 **Logic for testing:** contract = repeatedly reinforcing the same
 percept with a consistent-sign outcome must move `probe()`'s valence

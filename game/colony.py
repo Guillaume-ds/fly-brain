@@ -19,9 +19,7 @@ import numpy as np
 
 from fly_brain.agent import EscapeAgent, EscapeCircuitTemplate
 from fly_brain.plasticity import PlasticityAgent, PlasticityCircuitTemplate
-from world.entities import Fly
 from world.env import Action, ColonyStepResult, Environment
-from world.results import Channel
 
 logger = logging.getLogger(__name__)
 
@@ -78,19 +76,7 @@ class Colony:
         self.observations = {**self.observations, **{fly.id: self.env.observe(fly) for fly in new_flies}}
         return [fly.id for fly in new_flies]
 
-    def state_of(self, fly: Fly) -> dict[Channel, int]:
-        """A fly's current value on every channel a Result can move --
-        read straight off the enum so this can't drift from the world's
-        own definition (decisions.md #28).
-        """
-        return {channel: getattr(fly, channel.value) for channel in Channel}
-
-    def snapshot_states(self) -> dict[int, dict[Channel, int]]:
-        return {fly.id: self.state_of(fly) for fly in self.env.flies}
-
     def step(self) -> ColonyStepResult:
-        before = self.snapshot_states()
-
         actions: dict[int, Action] = {}
         for fly_id, obs in self.observations.items():
             plasticity_action = self.plasticity_agents[fly_id].sense_and_decide(obs)
@@ -100,10 +86,15 @@ class Colony:
         result = self.env.step(actions)
 
         for fly in self.env.flies:
-            if fly.id not in before:
-                continue  # born this tick -- no prior state to diff against yet
-            deltas = {channel: after - before[fly.id][channel] for channel, after in self.state_of(fly).items()}
-            self.plasticity_agents[fly.id].reinforce(deltas)
+            if fly.id not in self.plasticity_agents:
+                continue  # born this tick -- its agents are built in the births loop below
+            # result.effects (decisions.md #37) is EFFECT deltas only --
+            # items/tiles/mobs/fly-combat/kill-transfer -- never the
+            # constant hunger decay, and never a before/after diff of net
+            # state. A fly untouched by anything this tick simply has no
+            # entry; reinforce()'s own early-return handles that the same
+            # way it always has.
+            self.plasticity_agents[fly.id].reinforce(result.effects.get(fly.id, {}))
 
         for new_id, parent_id in result.births.items():
             parent_escape_gains = self.escape_agents[parent_id].get_params()

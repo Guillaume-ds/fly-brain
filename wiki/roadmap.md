@@ -215,14 +215,26 @@ yet started (see "After that" below).
 ## After that
 
 - ~~Stage 2/3~~ done, see `decisions.md` #36 above.
-- **The #28 foraging/reward-design gap** — `reward = max(0, ΔHUNGER)`
-  never punishes hunger *loss*, so a fly can starve having learned
-  nothing, and food is found only by luck, never deliberately sought.
-  Reconfirmed concretely in #36: a colony still starved out entirely
-  even with food spawn rate cranked to `0.2`. This is what's actually
-  standing between "the freeze+override mechanism works" (verified,
-  #36) and "the colony forages well" — a reward-design decision, not
-  more training. Not designed, not started.
+- ~~Effect-attributed reward~~ done, see `decisions.md` #37. Fixed the
+  concrete *attribution* half of #28's finding: `reward = max(0,
+  ΔHUNGER)` was computed from a whole-tick before/after diff, which
+  silently netted a real item effect against that tick's constant
+  hunger decay — a weak but genuine +0.4 hunger pickup, against -1
+  decay, read as -0.6 and produced **zero** reward, not just "decay
+  itself goes unpunished." `ColonyStepResult.effects` now isolates
+  item/tile/mob/fly-combat/kill-transfer deltas from decay entirely,
+  and `Colony` reinforces on that. Verified live, same scenario as
+  #36's: real improvement (survived to tick 449 vs 426, kept
+  reproducing after starvation deaths began) but not a full fix — the
+  colony still went fully extinct.
+- **What's left of #28** — hunger *loss* itself (decay, or a
+  `starve`-effect mob's negative delta) still carries no punishment
+  signal, and nothing gives a fly a reason to actively search for food
+  rather than stumble into it. This is what's actually standing between
+  "the freeze+override mechanism works, attribution is now correct"
+  (#36, #37) and "the colony forages well" — a reward-formula decision,
+  not more training and not another attribution bug. Not designed, not
+  started.
 - REINFORCE implementation, compared against ES on the same stage-1 task.
 - **Open-ended world** — replace the fixed-size grid with true open-ended,
   randomly-generated terrain, plus the spiderweb v2 mechanic (spiders drop

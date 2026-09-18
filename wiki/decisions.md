@@ -2285,3 +2285,98 @@ not a bug, but a footgun for exactly the kind of ad hoc post-hoc check
 this entry's own verification almost got wrong. `run_colony()`'s
 periodic audit logging (`audit_every`) exists specifically to avoid
 this; the fix was reading that log, not changing the summary.
+
+## 37. Effect-attributed reward: `ColonyStepResult.effects`, not a before/after state diff
+
+**Context:** #28's finding — "starvation produces no learning signal at
+all" — traced to a concrete mechanism, not just restated. Requested
+directly: **item should lead to effect, and effect should carry the
+reward** — i.e. the signal `PlasticityAgent.reinforce()` learns from
+should come from what an item/tile/mob/fly-combat *effect* actually
+produced, not from a net diff of a fly's state across the whole tick.
+
+**The mechanism, found by tracing the code, not assumed:**
+`Colony.step()` reinforced on `after - before`, a snapshot diff spanning
+an *entire* tick — natural hunger decay (`fly.hunger -= 1`, unconditional,
+every tick) included, indistinguishable from whatever an item/mob/tile
+actually did. `reward = max(0, ΔHUNGER) * weight` then meant: a real but
+weak food pickup (say +0.4 hunger) netted against that same tick's -1
+decay read as **-0.6**, and `max(0, -0.6) == 0` — **zero reward for a
+real food pickup.** This isn't only "decay itself goes unpunished" (#28's
+literal wording) — decay was actively swallowing genuine, if weak,
+rewards too, which is a stronger and more concerning version of the
+same finding.
+
+**Decision: `Environment` now tracks per-fly EFFECT deltas separately
+from decay, every tick, and `Colony` reinforces on that instead of a
+state diff.** `_write_channel_delta` (a module function) became
+`Environment._apply_channel_delta`, a method — the one place any
+channel write happens, for item/tile pickup, mob contact, fly combat,
+and kill-transfer alike, and now also the one place that write gets
+recorded into `self._tick_effects: dict[fly_id, dict[Channel, float]]`.
+Nothing can apply an effect without it being tracked, by construction —
+centralizing this in the shared helper `_apply_channel_delta` (built for
+exactly this "one place, not duplicated everywhere" reason back when it
+was `_write_channel_delta`) is what makes that guarantee cheap. Natural
+hunger decay never goes through this method — deliberately: it isn't an
+effect of anything the fly touched.
+
+`ColonyStepResult` gains `effects: dict[int, dict[Channel, float]]`,
+reset at the top of every `Environment.step()`. `Colony.step()` no
+longer snapshots state before/after at all — `state_of()`/
+`snapshot_states()` (only ever used for that diff) are removed as dead
+code — and calls `reinforce(result.effects.get(fly.id, {}))` directly.
+
+**A real bug this surfaced and fixed, not just an attribution change:**
+removing the old `if fly.id not in before: continue` guard (it looked
+like it only existed to skip a missing `before` entry) broke on a
+newborn fly — `env.step()` runs `resolve_reproduction()` internally, so
+a fly born mid-tick already exists in `env.flies` by the time `Colony`'s
+reinforcement loop runs, but its `PlasticityAgent` isn't built until the
+births loop *after* that — `self.plasticity_agents[fly.id]` raised
+`KeyError` on every birth. Caught immediately by re-running the same
+live verification from #36 (which happened to include a birth), not by
+the new unit tests, which is exactly the case
+`tests/test_effect_attribution.py`'s
+`test_colony_step_survives_a_birth_in_the_same_tick` was added to lock
+in afterward. Fixed with the more precise guard the old one was
+accidentally also providing: `if fly.id not in self.plasticity_agents:
+continue`.
+
+**Verified live, same scenario as #36's (a colony with food density
+cranked to 0.2, spiders off, reproduction on) — a real, measurable
+improvement, not a full fix:** the colony survived to tick 449 versus
+426 before, and kept producing new births at ticks 239 and 249 *after*
+starvation deaths had already begun — under the old attribution, once
+decline started it was a clean, unbroken slide to extinction; under the
+new one, the colony visibly kept fighting for a while.
+
+**Explicitly not fixed here, and not conflated with what was:** the
+colony still went fully extinct. This entry fixes *attribution* — a
+real effect is no longer silently zeroed by the same tick's decay — it
+does not make hunger *loss* itself carry a punishment signal, and it
+does not give a fly any reason to actively search for food rather than
+stumble into it. That remains #28's separate, still-open question,
+deliberately scoped out of this entry rather than silently bundled in:
+"item leads to effect, effect carries the reward" is an attribution
+fix, not a reward-formula redesign. Whether decay (or a `starve`-effect
+mob's negative hunger delta, added since #28 was first written) should
+itself carry punishment is the next decision to make if real foraging
+behavior is still wanted, not something this entry decided either way.
+
+**Not touched:** `fly_brain/plasticity.py`'s `reinforce()` — same
+formula (`reward = max(0, ΔHUNGER) * weight`, `punishment = max(0,
+-ΔHEALTH) * weight + max(0, ΔSTUCK_TICKS) * weight`), same signature,
+only its docstring corrected (it already said "the REAL state deltas...
+diffed by Colony," which was only half-true before this entry and is
+now fully accurate). No `fly_brain/` code changes at all — same pattern
+as #34/#35's combat/kill-transfer work: the fix lives entirely in
+`world/env.py`'s accounting.
+
+Tests: `tests/test_effect_attribution.py` (new, 10 tests) — decay never
+appears in `effects`; item/tile/mob/fly-combat/kill-transfer effects are
+tracked and match the registry exactly, not netted against anything; a
+description chosen to produce a weak hunger effect shows up as its own
+small positive number (the concrete regression case); `Colony.step()`
+verified via a spy to actually call `reinforce()` with `result.effects`;
+the newborn-guard regression above. 86 tests passing total.
