@@ -1,10 +1,13 @@
 # Roadmap
 
-## Current vision (see `decisions.md` #13)
+## Current vision (see `decisions.md` #13, `wiki/state.md`)
 
-A fly colony survives (and reproduces) against spider/food pressure that a
-human, via an LLM translator, can dial up or down. Not a building game —
-see #13 for why that was dropped.
+Two players (human or AI) send instructions; an LLM translates each into
+one call from a fixed action registry; those calls shape the world
+(items, mobs, environment); a fly colony survives, reproduces and learns
+against whatever the world becomes. Not a building game — see #13 for
+why that was dropped. Today only one instruction source and one
+creatable element kind (items) actually exist — see `wiki/world.md`.
 
 ## Status
 
@@ -15,6 +18,8 @@ see #13 for why that was dropped.
 | `world/env.py` — multi-fly, continuous spawn-rate params, threat movement, anonymous `Percept` observation | done, tested (`decisions.md` #14, #15, #20, #25) |
 | `world/items.py`, `world/results.py` — item-encoding pipeline + Result registry | done, tested (`decisions.md` #24, #25); real `NomicItemEncoder` untested live (`huggingface.co` blocked here) |
 | Player-driven item creation — generic `Item`, `create_item` director action | **done, tested** (`decisions.md` #27) |
+| Player-driven *mob* creation (`create_mob`) | **does not exist** — one built-in `Threat` type, rate-tunable only (`wiki/world.md`) |
+| Player-driven *tile*/terrain creation (`create_tile`) | **does not exist** — no area-based concept at all (`decisions.md` #29) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -136,6 +141,11 @@ yet started (see "After that" below).
   description-driven), plus a new permanent "trait" effect tier
   alongside today's transient `Channel` one. Brainstormed, not
   designed, not started (`decisions.md` #29).
+- **Per-kind typed creation functions** — `create_item` / `create_mob` /
+  `create_tile` with real per-kind parameter schemas instead of one
+  free-text action, each composing its own normalized description
+  string for the encoder, and unsupported parameters dropped by having
+  nowhere to land in the schema. Proposed, not designed, not approved.
 - **Two-player "god vs devil" mode** — human vs computer or human vs a
   friend, one growing the colony, one destroying it, same
   instructions→world→learning loop multiplexed across two sources.

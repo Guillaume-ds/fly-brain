@@ -1,7 +1,9 @@
 # The colony that lives in it
 
 Part of the standing checkpoint doc set — see [state.md](state.md) for
-the catchphrase and how these three files fit together.
+the catchphrase and how these three files fit together. This file is
+the second link in the chain: instructions → world → **flies →
+learning**.
 
 **Pillar contract:** a fly's behavior must always be explainable as one
 of three things — a fixed reflex, a learned response to real lived

@@ -2,10 +2,28 @@
 
 > **You shape the world. They learn to survive it.**
 
-A game where the user, through an LLM, shapes an open-ended world to
-try to wipe out a fly colony that adapts to everything it encounters —
-within a life, and across generations. That adaptiveness is the whole
-reason this is a game and not a shooting gallery.
+Two players — each either a human or an AI — send instructions to the
+game engine. Those instructions shape an open-ended world: its items,
+its mobs, its environment. The world acts on a fly colony living in it,
+and the colony learns from every interaction it survives — within a
+life, and across generations. One player is trying to grow the colony,
+the other to wipe it out. Neither one ever touches a fly directly.
+
+    instructions → world → flies → learning → back to the players
+
+That single chain is the whole game, and every piece of this project
+sits somewhere on it. The colony's adaptiveness is what makes it a game
+rather than a shooting gallery: the same instruction stops working once
+the flies have lived through it.
+
+**Status of the framing itself:** the chain above is built and running
+end to end for *one* instruction source and *one* element kind —
+instructions become items (`director/`'s `create_item`), and items act
+on flies. Two simultaneous players (`decisions.md` #29) and the other
+two element kinds (mobs the players can create, environment tiles at
+all) are the framing this is being built toward, not what exists today.
+Each of the three files below says exactly where its own half of the
+chain stands.
 
 This is the standing checkpoint doc set — what the game *is*, right
 now, in plain terms. `roadmap.md` tracks piece-by-piece implementation
@@ -15,9 +33,9 @@ and updated whenever the core loop changes.
 
 The description splits into three problems, one file each:
 
-- **[world.md](world.md)** — the world the user shapes: how it's built,
-  how the user edits it, what an item is, what's still missing from
-  "open."
+- **[world.md](world.md)** — the world the players shape: how it's
+  built, how instructions reach it, what an item is, what's still
+  missing from "open."
 - **[colony.md](colony.md)** — the colony that lives in it: how a fly
   survives, perceives, decides, learns within its life, and evolves
   across generations.

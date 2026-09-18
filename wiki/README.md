@@ -2,10 +2,13 @@
 
 > **You shape the world. They learn to survive it.**
 
-A game where the user, through an LLM, shapes an open-ended world to
-try to wipe out a fly colony that adapts to everything it encounters —
-within a life, and across generations. The user never acts on the flies
-directly — only on the world around them.
+Two players — each either a human or an AI — send instructions to the
+game engine. Those instructions shape an open-ended world (items, mobs,
+environment), the world acts on a fly colony living in it, and the
+colony learns from everything it survives — within a life, and across
+generations. One player is trying to grow the colony, the other to wipe
+it out. Neither ever acts on a fly directly, only on the world around
+it. See [state.md](state.md) for how much of that chain exists today.
 
 This is a working wiki, not a polished writeup — it's maintained turn by
 turn as the project develops, so it stays an accurate source of truth for
@@ -23,7 +26,7 @@ loop changes.
 - **[state.md](state.md)** — the index: the catchphrase, how the three
   files below fit together, and the description/status/todo/testing-logic
   shape every bullet in them follows.
-- **[world.md](world.md)** — the world the user shapes.
+- **[world.md](world.md)** — the world the players shape.
 - **[colony.md](colony.md)** — the colony that lives in it.
 - **[loop.md](loop.md)** — the loop that connects them.
 

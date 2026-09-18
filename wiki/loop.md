@@ -1,13 +1,18 @@
 # The loop that connects them
 
 Part of the standing checkpoint doc set — see [state.md](state.md) for
-the catchphrase and how these three files fit together.
+the catchphrase and how these three files fit together. This file is
+what closes the chain: it's why instructions reach the world *while*
+the flies are living in it, rather than between rounds.
 
 **Pillar contract:** the world and the colony must never need to know
 about each other's internals to interact — everything that crosses
-between "the user's edits" and "what a fly experiences" goes through
-`Environment`'s public surface, in real time, without either side
-blocking the other.
+between "an instruction landed" and "what a fly experiences" goes
+through `Environment`'s public surface, in real time, without either
+side blocking the other. The loop must also stay indifferent to *how
+many* players are sending instructions and to whether any given one is
+a human or an AI: instructions arrive on a queue, and the queue has
+never cared who filled it.
 
 ---
 
@@ -27,6 +32,10 @@ requests rather than only on input.
   for the frontend (#19)
 - next: nothing planned for the loop mechanics themselves; the frontend
   would consume this same loop, not replace it
+- later: exactly one instruction source feeds the queue today. The
+  two-player mode (`decisions.md` #29) needs a second one and needs to
+  know which player a queued instruction came from — a source tag on
+  the queued request, not a change to how time passes
 
 **Logic for testing:** contract = the colony keeps ticking at
 approximately the configured rate regardless of whether requests are
