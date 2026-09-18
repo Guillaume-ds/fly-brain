@@ -620,22 +620,40 @@ still a name, so it's the same hardcoding with different syntax.
    The encoder is a small **local** model (not a hosted API) — no network
    dependency, no per-call cost, deterministic across runs, and it never
    trains, only encodes, keeping it in the same "off-the-shelf, fully
-   inspectable tool" category as everything else in the project. Output
-   dimensionality is kept small by construction (a compact model, e.g.
-   `all-MiniLM-L6-v2`, plus one fixed PCA step down to a small final size fit
-   once on the authored item vocabulary — or a Matryoshka-style model
-   natively truncatable to a small prefix, skipping the separate PCA step).
-   Reduction is not mathematically required (the fixed KC projection `W`
-   works at any input size) — it's done because most of a general-purpose
-   encoder's dimensions are irrelevant noise for this narrow domain, because
-   it keeps the injected dimensionality in the same rough order of magnitude
-   as the real PN population KCs actually sample from, and because a small
-   vector is something a human can actually read and reason about. Exact
-   final dimensionality is an implementation detail to tune, not fixed here.
-   Per-instance jitter is still applied numerically, after encoding, exactly
-   as already designed — never by varying the text.
+   inspectable tool" category as everything else in the project.
 
-   This authoring pipeline (description → encoder → PCA/truncation → jitter)
+   **Dimensionality reduction: Matryoshka truncation, not PCA.** Both were
+   considered. PCA (fit once on a compact model's output, e.g.
+   `all-MiniLM-L6-v2`) was rejected once a concrete problem was worked
+   through: items get added mid-game (e.g. a new "smelly apple" variant),
+   and PCA's axes are only as good as the vocabulary they were fit on — an
+   item varying along a direction the original fit saw little/no variance in
+   gets compressed away, silently under-differentiated. Refitting PCA later
+   to fix that is worse, not better: it shifts the axes, which shifts every
+   *existing* item's vector too, including ones a live fly already has
+   learned `KC→MBON` associations against — a mid-game refit would silently
+   corrupt what a fly has already learned.
+
+   Chosen instead: a Matryoshka Representation Learning model
+   (`nomic-embed-text-v1.5`, confirmed to natively support truncation to any
+   size from 64–768 dims), truncated to a small fixed prefix (e.g. 64 dims).
+   Truncation is a fixed, vocabulary-independent operation — "take the first
+   N dimensions" is defined identically for item 1 and item 10,000, forever,
+   with no fitting step and therefore nothing that can go stale or need
+   retroactive correction as new items get added.
+
+   Reduction itself is not mathematically required (the fixed KC projection
+   `W` works at any input size) — it's still done because most of a
+   general-purpose encoder's dimensions are irrelevant noise for this narrow
+   domain, because it keeps the injected dimensionality in the same rough
+   order of magnitude as the real PN population KCs actually sample from,
+   and because a small vector is something a human can actually read and
+   reason about. Exact final truncation size is an implementation detail to
+   tune, not fixed here. Per-instance jitter is still applied numerically,
+   after encoding/truncation, exactly as already designed — never by varying
+   the text.
+
+   This authoring pipeline (description → encoder → truncation → jitter)
    lives entirely in `world/`'s content-authoring layer. It never crosses
    into `Observation` — the fly only ever receives the resulting numeric
    `Percept`, never text, never a type name.
