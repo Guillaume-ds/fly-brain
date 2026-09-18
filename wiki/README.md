@@ -17,6 +17,9 @@ end result.
 
 Pages:
 
+- **[state.md](state.md)** — the standing checkpoint doc: what the game
+  *is*, right now, in plain terms. Re-read/updated whenever the core
+  loop changes.
 - **[architecture.md](architecture.md)** — how the project is structured,
   what each module does, and the interfaces between them.
 - **[stack.md](stack.md)** — what libraries/tools are used and why.
@@ -26,6 +29,6 @@ Pages:
 - **[roadmap.md](roadmap.md)** — current status and what's next.
 
 If you're picking this project back up after a while, or an AI assistant
-is resuming work on it, start with `roadmap.md` for "where are we," then
-`decisions.md` for "why is it built this way" before changing anything
-load-bearing.
+is resuming work on it, start with `state.md` for "what is this,"
+`roadmap.md` for "where are we," then `decisions.md` for "why is it
+built this way" before changing anything load-bearing.
