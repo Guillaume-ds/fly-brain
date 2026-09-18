@@ -1604,3 +1604,156 @@ parameters means `ActionSpec` carrying a real schema and
 `choose_action()` returning arguments rather than
 `tuple[str, str | None]` — which touches `base.py`, both controllers, and
 `game/live_run.py`'s `apply_requests()`.
+
+## 31. Finishing item/mob/tile: `create_tile`, bidirectional mob valence via signed strength, `Threat` → `Mob`
+
+**Context:** finishing the design pass #30 started. Three things
+prompted a revisit rather than a straight extension: (1) `create_tile`
+was still undesigned, (2) mobs were reconsidered — "they should be
+either good or bad, that's where the custom functions come in," the
+same axis items and tiles already have, rather than hostile-only, and
+(3) once valence needed to flip sign, keeping it a separate declared
+field turned out to be unnecessary. This entry **supersedes #30's mob
+signature** (the `disposition`-free, hostile-only version reasoned
+through immediately before this one) rather than rewriting it — #30
+still stands as the record of why mob effects are authored, never
+encoder-derived.
+
+**`create_item`:** unchanged from #30, `name`/`description` split
+confirmed.
+
+**`create_tile`: designed.** Reuses the item mechanism entirely —
+`perceive()` is already generic over anything with
+`position`/`attributes`/`radius`, and `apply_result()` is already
+generic over `Channel` — so a `Tile` needs no new perception or effect
+code, only a new entity and a per-tick resolution loop instead of a
+pickup-and-remove one.
+
+```
+create_tile(name: str, description: str)
+    embeds: "{name}, {description}"
+    effect: blend_deltas() on that vector, scaled down and re-applied
+            EVERY TICK a fly remains within radius — never removed
+```
+
+Needs a `MAX_TILE_TYPES` cap (same reasoning as `MAX_ITEM_TYPES`: an
+unbounded number of lingering area effects is a much bigger exploit
+than an unbounded number of consumed items) and a per-tick scale-down
+constant so a lava tile isn't instant death and a healing tile isn't
+infinite hunger in one step.
+
+**`create_mob`, reworked: bidirectional valence via signed `strength`,
+not a declared disposition.**
+
+The insight that resolved this: healing is just damage with the sign
+flipped, so `strength` itself can carry valence — `create_mob(name,
+strength, channel)`, with `strength` ranging `[-5,-1] ∪ [1,5]` and
+`channel` **reusing `Channel` directly** (`HUNGER`/`HEALTH`/
+`STUCK_TICKS`) instead of #30's hostile-flavored `poison`/`physical`/
+`sticky`, which baked valence into the label itself and couldn't
+represent a beneficial effect cleanly.
+
+This does **not** mean `delta = strength * scale` directly — "more is
+good" isn't true for every channel:
+
+```
+HUNGER:       delta = +strength * scale   (positive strength feeds; negative starves)
+HEALTH:       delta = +strength * scale   (positive strength heals; negative damages)
+STUCK_TICKS:  delta = -strength * scale   (positive strength FREES; negative traps)
+```
+
+The per-channel sign flip is what makes "positive strength always helps
+the fly" hold everywhere, including the case #30 didn't anticipate: a
+negative-strength `STUCK_TICKS` mob is a coherent trap (as before), and
+a **positive-strength one is a rescuer that frees an already-stuck
+fly** — mechanically sound under this scheme with no extra code.
+
+Still authored, never `blend_deltas()` — the whole reason #30 kept mob
+effect off the encoder (protecting the frozen escape circuit's
+training) is unaffected by adding a sign.
+
+**The mandatory clause now triggers off the computed net effect, not a
+declared field.** #30's forced embedding clause existed to defend the
+frozen escape reflex against a mimic that could actually kill. That
+risk is real only when `strength * channel-sign` comes out net-harmful
+on `HEALTH` or `HUNGER` — a harmful `STUCK_TICKS` mob is unpleasant, not
+lethal, and needs no forced defense either. So disposition is never a
+field the player or the translator sets; it falls out of the sign
+they already had to provide to get the effect they wanted. That's the
+resolution to a bias question raised in this same conversation:
+requiring the player to state the *act* ("heals +5"), not just an
+adjective ("bad"), is what lets the translator extract a correct signed
+`strength` even from a self-contradictory description — but that only
+disambiguates the **mechanical** effect. The **name** still goes
+untouched into the embedding, so a mob can perceive as dangerous while
+mechanically healing (a scary-looking healer a fly flees from) or
+perceive as harmless while mechanically harmful (caught by the clause
+when net-harmful, same as #30). Two separate risk surfaces, resolved
+by two separate mechanisms.
+
+```
+create_mob(name: str, strength: int in [-5,-1] ∪ [1,5], channel: Channel)
+
+    embeds:
+        net effect harmful on HEALTH/HUNGER:
+            "{name}, a dangerous, fast predator dealing {strength_word}
+             ...damage"                          -- #30's clause, forced,
+                                                     worded from the
+                                                     relevant Result's own
+                                                     reference vocabulary
+        otherwise (beneficial, or harmful-but-not-lethal on STUCK_TICKS):
+            "{name}"                             -- flavor only, no forced clause
+
+    perception: that vector, via Percept -- unchanged
+    effect: per the sign table above, applied per tick of contact -- authored
+```
+
+Worked example, real values, `HashingItemEncoder` (values are
+placeholders, see #24/#30's standing caveat — only the *structure* is
+load-bearing here):
+
+```
+create_mob(name='bad sorcerer', strength=+5, channel=HEALTH)
+    net effect: +5 on HEALTH -> beneficial -> no forced clause
+    embedded: "bad sorcerer"
+    -- still reads as dangerous to sense_danger() if "bad sorcerer"
+       scores high on the danger vector: a fly may flee something
+       that would have healed it. Not a bug -- the inverse-mimicry
+       case this entry's reasoning predicts.
+```
+
+**Decision: `Threat` is renamed `Mob`.** The class stopped meaning
+"the thing that's always dangerous" the moment it could be beneficial.
+`entities.Threat` becomes `entities.Mob`; `world/env.py`'s
+`self.threats`/`THREAT_TYPE_NAME`/`move_threats()`/`self.threat_type`
+and `world/world.md`'s "the single documented exception" language all
+need updating to match at implementation time — noted here as scope,
+not done in this entry, which is design only. The built-in spider is
+unaffected mechanically (still `strength=None`, still unconditional
+insta-kill on contact, from #30's previous entry) — only its class
+changes name.
+
+**Rejected alternative:** a separate `disposition: enum[hostile,
+beneficial]` field (what the immediately-preceding, now-superseded
+reasoning in #30 proposed). Rejected once signed `strength` made it
+redundant — carrying the same information twice, with the two
+capable of disagreeing (`disposition=beneficial, strength=-5`), is
+strictly worse than one field that can't contradict itself.
+
+**Still open:** `Threat`/`Mob`'s effect-composition function needs
+per-channel clause wording (a `HUNGER`-harmful mob and a
+`HEALTH`-harmful mob shouldn't share one sentence) — left as an
+implementation detail, not a design fork; each channel's own existing
+Result reference vocabulary (`world/results.py`) is the natural source,
+same principle as #30. `MAX_TILE_TYPES`'s value and the tile per-tick
+scale-down constant are tuning, not design, and can be set when
+implemented.
+
+**Sequencing, reaffirmed:** item/mob/tile creation is now fully
+designed. Multi-colony ownership and the resource-cost system (both
+raised in this same conversation, not yet logged) are deliberately
+**not** folded in here — resource cost would change how `strength`'s
+range/cost is bounded, and ownership would add a `target` to every
+create_* call, but neither changes the effect mechanics this entry
+pins. Finish item/mob/tile first, as agreed; those come after as their
+own decisions.

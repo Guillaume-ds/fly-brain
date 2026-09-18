@@ -89,11 +89,13 @@ wired in, not two.
   structure/effect split in `decisions.md` #29), and an unsupported
   parameter in a request simply has nowhere to go in the schema, so it
   is dropped silently rather than tempting anything to widen the
-  engine. **Designed, not implemented** (`decisions.md` #30) — no code
-  written. `create_item` and `create_mob` are deliberately asymmetric
-  there: an item's embedding drives both perception and effect, a mob's
-  drives perception only while `strength`/`type` drive its damage
-  directly. Gated on one measurement first: a creatable mob's *name*
+  engine. **Designed, not implemented** (`decisions.md` #30, revised
+  by #31) — no code written. All three kinds now share the same good/
+  bad axis: an item's and a tile's embedding drives both perception and
+  effect (a tile is a lingering, re-applied variant of the same item
+  mechanism); a mob's embedding drives perception only, while a signed
+  `strength` on a `Channel` drives its effect directly — `Threat` is
+  renamed `Mob` to match (#31). Gated on one measurement first: a creatable mob's *name*
   has to reach the encoder (otherwise every mob sharing a
   type/strength shares one vector and flies can't tell a spider from a
   wasp), but a food-sounding name on a lethal mob then perceives as
@@ -182,33 +184,40 @@ re-testing every function that touches an item.
 ### What's still missing from "open"?
 
 **What it is:** two of the three element kinds an instruction is
-supposed to be able to create don't exist as creatable things.
+supposed to be able to create don't exist as creatable things yet —
+though both are now fully designed, just not built.
 
-*Mobs:* there is one built-in `Threat` type, created in
+*Mobs:* there is one built-in `Threat`/`Mob` type, created in
 `Environment.__init__` and tunable only by rate. A player can ask for
-more spiders; a player cannot ask for a *different* spider. Making them
-creatable runs straight into the carve-out below.
+more spiders; a player cannot ask for a *different* spider.
 
 *Environment:* nothing area-based exists at all — no lava tile, no
 slowing zone, no persistent hazard. Everything today is a discrete
 thing you touch, not a place you're in.
 
-**Where we stand:** acknowledged gaps, not designed.
+**Where we stand:** design finished for both (`decisions.md` #30, #31),
+implementation not started.
 
 **What's left:**
-- next: per-kind typed creation functions (see "How do instructions
-  reach the world?" above) — the shape that would give mobs and tiles
-  the same player-creatable status items already have
-- also next: decide whether a terrain effect is a variant of `Item`
-  (e.g. one with a radius that lingers instead of being consumed) or a
-  genuinely new subsystem — open design question, not started
-- the blocker on creatable mobs is unchanged and is *not* structural:
-  a spider's lethality goes through `determine_fly_death()`, not the
-  Result registry, precisely so it doesn't depend on the encoder's
-  judgment. Under today's stub encoder a spider reads as more food-like
-  than damage-like (#28), so a described-into-existence mob can't be
-  allowed to derive its own danger until the real semantic encoder is
-  in place. One gate, not two (`decisions.md` #29)
+- next: build the per-kind typed creation functions themselves (see
+  "How do instructions reach the world?" above) — `create_tile` reuses
+  the existing item mechanism almost entirely (same perception, same
+  Result-registry effect, only persistent instead of consumed);
+  `create_mob` needs `Threat` renamed `Mob`, a signed `strength`
+  parameter, and graded per-tick contact damage replacing today's
+  unconditional insta-kill for anything player-created (the built-in
+  spider is unaffected)
+- the mob blocker from #29 ("one gate, not two" — a spider's lethality
+  can't safely be encoder-derived under the stub encoder, #28) no
+  longer applies the way it did: `strength`/`channel` are authored
+  parameters, read directly, never through the Result registry, so a
+  created mob's effect doesn't depend on the encoder's judgment at all
+  any more. What the encoder *does* still decide is perception — can a
+  fly tell a described mob apart from another, and can a misleadingly
+  gentle name blunt the frozen escape reflex's response to something
+  that's actually lethal (#30's mandatory clause). That's a quality
+  question now, not a correctness one, and it's what
+  `world/measure_encoder.py` measures
 
 **Logic for testing:** none yet — no contract exists until the design
 does. Once one exists, the first thing to check against it should be
