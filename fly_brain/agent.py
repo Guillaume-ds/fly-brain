@@ -26,6 +26,8 @@ its own Circuit state (genome via set_params(), membrane potential).
 
 from __future__ import annotations
 
+import logging
+import pathlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -36,6 +38,8 @@ from world.items import ItemEncoder
 
 from .circuit import Circuit, CircuitBlueprint, build_circuit
 from .data import load_connectome_data
+
+logger = logging.getLogger(__name__)
 
 MOTOR_TYPE = "TTMn"
 DANGER_DESCRIPTION = "a dangerous, fast predator"
@@ -153,3 +157,24 @@ class EscapeAgent:
 
     def set_params(self, theta: np.ndarray) -> None:
         self.circuit.set_params(theta)
+
+
+def load_starting_gains(
+    template: EscapeCircuitTemplate, checkpoint_path: pathlib.Path | None = None
+) -> np.ndarray:
+    """A trained checkpoint gives a strong starting genome (see
+    wiki/decisions.md #13 for why ES-then-reproduction, not one or the
+    other, and #4 for why curriculum training chains stage N from stage
+    N-1's checkpoint rather than starting fresh each time); falls back
+    to untrained (real biology, gain=1.0) if none is given or found.
+
+    Lives here, not in training/ or game/, so both can call it without
+    either importing from the other -- training/run.py uses it to chain
+    curriculum stages, game/colony.py uses it to bootstrap a live colony
+    from a finished stage's weights.
+    """
+    if checkpoint_path is not None and checkpoint_path.exists():
+        logger.info("Loaded starting genome from %s", checkpoint_path)
+        return np.load(checkpoint_path)
+    logger.info("No checkpoint given/found -- starting from untrained (real biology, gain=1.0)")
+    return np.ones(len(template.blueprint.edges))

@@ -6,12 +6,12 @@ import argparse
 import logging
 import pathlib
 
-from fly_brain.agent import build_escape_template
+from fly_brain.agent import build_escape_template, load_starting_gains
 from fly_brain.plasticity import build_plasticity_template
 from world.env import Environment
 from world.items import HashingItemEncoder
 
-from .colony import Colony, load_starting_gains, run_colony
+from .colony import Colony, run_colony
 from training.run import CHECKPOINT_DIR
 
 logger = logging.getLogger(__name__)

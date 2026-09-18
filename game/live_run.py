@@ -21,12 +21,12 @@ from director.actions import ActionSpec, build_registry
 from director.base import WorldController
 from director.claude_controller import ClaudeController
 from director.rule_based_controller import RuleBasedController
-from fly_brain.agent import build_escape_template
+from fly_brain.agent import build_escape_template, load_starting_gains
 from fly_brain.plasticity import build_plasticity_template
 from world.env import DEFAULT_OWNER, Environment
 from world.items import HashingItemEncoder
 
-from .colony import Colony, load_starting_gains
+from .colony import Colony
 from training.run import CHECKPOINT_DIR
 
 logger = logging.getLogger(__name__)

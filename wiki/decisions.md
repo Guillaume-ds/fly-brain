@@ -2195,3 +2195,93 @@ weak opponent's vector positive over time; costly, unproductive fights
 against a strong one drift theirs negative.
 
 **Not implemented.** No code changes in this entry.
+
+## 36. Stage 2 trained; stage 3 found already superseded by #22's plasticity circuit
+
+**Context:** stage 1 (clean escape) was the only curriculum stage
+built. Stage 2 ("escape amid distractor noise," #4) needed a concrete
+interpretation in the *current* architecture — #4/#5 predate #22's
+redesign from a fixed `threat_signal` scalar to an open-ended `Percept`
+list. Stage 3 ("forage for food while threats and noise are both
+present," transferred via freeze+override, #5) needed the same check.
+
+**Decision: stage 2's "noise" is real distractor percepts, not
+injected sensor noise.** In the current `sense_danger()`-based design,
+noise that would matter is *other simultaneous percepts the escape
+circuit must correctly ignore* — concretely, food alongside the spider
+(`food_enabled=True`, the one change from stage 1's config; spider
+parameters unchanged, since #4 calls this "harder version of the SAME
+task" via distraction, not a tougher spider). Worth noting honestly:
+this is also a real robustness test of the encoder specifically, since
+`HashingItemEncoder` is orthographic — shared character trigrams
+between a food description and the danger description could
+accidentally correlate the two in a way a real semantic encoder
+wouldn't. `training/curriculum.py`'s `STAGES[2]` implements this.
+
+**Trained, smoke-test scale** (25 iterations, population 24, chained
+from stage 1's checkpoint via the mechanism below): real, non-degenerate
+`population_reward_std` throughout (5–13), the fly repeatedly hitting
+the full 80-tick survival cap even with food percepts present. Same
+caveat as stage 1's own original verification (#15): a smoke test, not
+a final trained checkpoint — a longer real run is still future work.
+
+**Decision: curriculum stages chain by default — stage N starts from
+stage N-1's saved checkpoint, not from scratch.** This is what "curriculum
+learning" in #4's own name means, and `training/run.py` didn't actually
+do it before this entry — every stage always started from
+untrained (gain=1.0). Fixed via `training/run.py`'s new
+`default_init_checkpoint()` (stage N looks for
+`CHECKPOINT_DIR / STAGES[N-1].name`, `None` for stage 1 or if nothing's
+been trained yet) plus an explicit `--init-checkpoint` override. This
+needed `load_starting_gains()` — previously defined only in
+`game/colony.py`, for bootstrapping a live `Colony` — moved to
+`fly_brain/agent.py`, its natural home: beneath both `training/` and
+`game/` in the existing import order, so neither needs to import from
+the other. `game/colony.py`, `game/live_run.py`, `game/colony_run.py`
+all updated to import it from its new location; behavior unchanged.
+
+**Finding: stage 3, as #5 originally specified it, has already been
+superseded by #22's plasticity circuit — verified live, not assumed.**
+#5 called for "a separate, newly-trainable pathway for foraging/search"
+combined with the frozen escape circuit via "if the frozen escape
+circuit fires, it overrides." `Colony.step()` already does exactly
+this — `escape_action if escape_action is not None else
+plasticity_action` — except the "newly-trainable pathway" is the live,
+dopamine-gated plasticity circuit built in #22/#26, not a second
+ES-trained one. The freeze+override *mechanism* #5 asked for needs no
+new code; what changed is *how* the overridden pathway learns (live,
+within a lifetime, rather than pre-trained once).
+
+Verified directly: a `Colony` built from the stage-2 checkpoint (frozen)
++ the plasticity circuit (live), in an environment with food, spiders,
+and reproduction all active, shows real learning — `mean_gain_drift`
+climbing 0.000 → 2.307 → 2.753 → 8.626 across periodic audits, 7/28/26/10
+real reinforcement events per audit window. This is the same live-learning
+signature #26 already verified for a single escape-only environment, now
+confirmed to hold with a *noise-trained* (stage 2) escape circuit
+underneath it and food/reproduction both active simultaneously — the
+actual integration stage 3 was meant to test.
+
+**Not a new finding, but reconfirmed here, concretely:** the colony in
+that same run still went fully extinct (population peaked at 10, ended
+at 0) despite food spawn rate cranked to `0.2` — an aggressive setting,
+not a realistic default. This is the reward-design gap already on
+record (#28: `reward = max(0, ΔHUNGER)` never punishes hunger *loss*,
+so a fly can starve having learned nothing, and food is found only by
+luck, never deliberately sought). Stage 3's transfer mechanism working
+correctly is not the same claim as "the colony forages well" — the
+first is now verified; the second was already known blocked on a
+decision that hasn't been made (#28's still-open question), not on
+anything trainable. Not addressed in this entry — flagging precisely
+so "stage 3 done" isn't misread as "foraging works."
+
+**One test-methodology trap worth recording, since it cost real time to
+find:** `Colony.plasticity_summary()` only aggregates over *currently
+alive* flies' agents — `Colony.step()` deletes a dead fly's
+escape/plasticity agents from their dicts the moment it dies. Checking
+`plasticity_summary()` *after* a colony has gone fully extinct will
+always show zero events, regardless of what happened during the run —
+not a bug, but a footgun for exactly the kind of ad hoc post-hoc check
+this entry's own verification almost got wrong. `run_colony()`'s
+periodic audit logging (`audit_every`) exists specifically to avoid
+this; the fix was reading that log, not changing the summary.

@@ -24,7 +24,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Multi-colony ownership — `Fly.owner`, per-owner extinction, fly-vs-fly perception/combat/kill-transfer, `target` on creation | **done, tested** (`decisions.md` #34, #35) — every fly perceives every other fly through a fixed, exactly orthogonal per-owner vector; the `Percept` itself and the anonymity contract are unchanged; combat/kill-transfer reuse existing mechanisms (authored `HEALTH` delta, the existing `reward = max(0, ΔHUNGER)` term) with zero `fly_brain/` changes |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
-| `training/curriculum.py` — stage configs | done (stage 1 only) |
+| `training/curriculum.py` — stage configs | done (stages 1, 2; chains by default from the prior stage's checkpoint, `decisions.md` #36) |
 | `training/trainer.py` / `training/run.py` — ES training loop | done, mechanically tested |
 | Stage 1 training run (clean escape) | **unblocked and verified** — real `population_reward_std` every iteration (`decisions.md` #15); 15-iteration smoke test only, a longer real run is still future work |
 | `director/` — swappable LLM world-controller layer | done; registry → rule-based controller → `Environment` verified end to end; `ClaudeController` built to spec but **not tested live** (no API credentials in this environment) — see `decisions.md` #16 |
@@ -34,7 +34,8 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | No foraging behavior — flies only eat food they wander into by luck | known limitation (`decisions.md` #21); **partly a reward-design gap, not just a curriculum one** — starvation produces no learning signal at all (`decisions.md` #28) |
 | `tests/` — contract tests (item contract, mutation-verified) | **done** (`decisions.md` #28) |
 | Live game loop (`game/live_run.py`: `director/` commands affecting a running `Colony` continuously) | **done, tested** (`decisions.md` #23) |
-| Stage 2 / stage 3 (noisy escape, forage transfer) | not started |
+| Stage 2 (noisy escape) | **done, smoke-test trained** (`decisions.md` #36) — real fitness signal with food percepts present alongside the spider; a longer real run is still future work, same caveat as stage 1 |
+| Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Actual foraging success is still blocked on #28's reward-design gap, unrelated to training |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
 | Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19), not started — deliberately deferred until the core Python game loop works end to end |
@@ -213,9 +214,15 @@ yet started (see "After that" below).
 
 ## After that
 
-- Stage 2: same environment, harder/noisier threat signal.
-- Stage 3: freeze stage-2 weights, add and train a new foraging pathway,
-  combine via the override rule from `decisions.md` #5.
+- ~~Stage 2/3~~ done, see `decisions.md` #36 above.
+- **The #28 foraging/reward-design gap** — `reward = max(0, ΔHUNGER)`
+  never punishes hunger *loss*, so a fly can starve having learned
+  nothing, and food is found only by luck, never deliberately sought.
+  Reconfirmed concretely in #36: a colony still starved out entirely
+  even with food spawn rate cranked to `0.2`. This is what's actually
+  standing between "the freeze+override mechanism works" (verified,
+  #36) and "the colony forages well" — a reward-design decision, not
+  more training. Not designed, not started.
 - REINFORCE implementation, compared against ES on the same stage-1 task.
 - **Open-ended world** — replace the fixed-size grid with true open-ended,
   randomly-generated terrain, plus the spiderweb v2 mechanic (spiders drop

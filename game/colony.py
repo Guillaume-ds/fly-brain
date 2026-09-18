@@ -14,7 +14,6 @@ inherited, only the capacity to learn them is.
 from __future__ import annotations
 
 import logging
-import pathlib
 
 import numpy as np
 
@@ -133,21 +132,6 @@ class Colony:
         drifts = [agent.gain_drift() for agent in self.plasticity_agents.values()]
         events = sum(agent.reinforcement_events for agent in self.plasticity_agents.values())
         return {"mean_gain_drift": float(np.mean(drifts)), "total_reinforcement_events": events}
-
-
-def load_starting_gains(
-    template: EscapeCircuitTemplate, checkpoint_path: pathlib.Path | None = None
-) -> np.ndarray:
-    """A trained checkpoint gives the colony a strong starting gene pool
-    (see wiki/decisions.md #13 for why ES-then-reproduction, not one or
-    the other); falls back to untrained (real biology, gain=1.0) if none
-    is given or found.
-    """
-    if checkpoint_path is not None and checkpoint_path.exists():
-        logger.info("Loaded starting genome from %s", checkpoint_path)
-        return np.load(checkpoint_path)
-    logger.info("No checkpoint given/found -- starting from untrained (real biology, gain=1.0)")
-    return np.ones(len(template.blueprint.edges))
 
 
 def run_colony(colony: Colony, max_ticks: int, audit_every: int = 50) -> list[int]:
