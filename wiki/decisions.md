@@ -676,6 +676,61 @@ still a name, so it's the same hardcoding with different syntax.
    into `Observation` — the fly only ever receives the resulting numeric
    `Percept`, never text, never a type name.
 
+5. **Reinforcement mechanism: a Result registry, real state channels, reward
+   derived from real deltas only.** Extends part 2's "reinforcement ties to
+   real outcomes" with a general mechanism instead of a two-outcome special
+   case (food pickup / death).
+
+   New real state on `Fly`: `health` and `stuck_ticks`, alongside the
+   existing `hunger`. Death gains a new cause (`health <= 0`), alongside the
+   existing `'starved'`/`'threat'`. Motivation: instant death gives the
+   lifetime plasticity circuit nothing to learn from — a fly that dies on
+   first contact with something bad never survives to express whatever its
+   synapses just updated to. Graded damage lets a fly survive a bad
+   encounter, receive the punishment signal, and visibly behave differently
+   afterward — the only way learned avoidance is observable within one
+   lifetime.
+
+   A small, fixed **Result registry** (`food`, `damage`, `immobilize`,
+   extensible later — e.g. a `stick`/web result down the roadmap): each
+   encoded the same way items are (short description → the same frozen
+   encoder + truncation from part 4), each mapped to one real physiological
+   channel (`food`→`hunger`, `damage`→`health`, `immobilize`→`stuck_ticks`).
+   On interaction, `weight = max(0, cosine_similarity(item_vector,
+   concept_vector))` per Result, applied simultaneously (not argmax/hard
+   pick) — this is what makes an item close to both `food` and `damage`
+   (poisonous meat, Minecraft-rotten-flesh-style) both heal and hurt at
+   once, and what makes a stronger food-resemblance produce a bigger
+   `Δhunger` than a weak one, with no per-item authored number needed.
+
+   **The dopamine/reward signal is derived from the real resulting
+   `Δhealth`/`Δhunger`/`Δstuck_ticks`, never directly from the item-Result
+   similarity score.** This is the one rule that keeps this consistent with
+   part 2: computing reward straight from item-to-concept similarity would
+   quietly reintroduce object-level valence through a back door (reward
+   depending on what the item semantically resembles, rather than on what
+   actually happened to the fly). Routing it through the real state change
+   keeps the fly reinforced only by lived consequences.
+
+   Authoring `damage is bad, food is good` at the **state/channel** level is
+   not a violation of "no assigned object valence" — it's the same category
+   as real biology hardwiring pain/satiation as innate drives, not learned.
+   Items themselves stay completely unlabeled and valence-free until
+   experienced; only this small, fixed Result universe carries authored
+   sign and weight. One new small authored quantity follows from this: a
+   per-channel weight to combine `Δhunger`/`Δhealth`/`Δstuck_ticks`
+   (different units/scales) into one dopamine magnitude — a handful of
+   tunable numbers at the channel level, not per item.
+
+   **Distinct from ES's fitness.** Checked `training/trainer.py`: ES's
+   current reward is purely `ticks_survived` (mean over
+   `episodes_per_eval` rollouts, standardized across the population each
+   iteration) — no item/food/damage term exists there at all, and stage 1
+   even runs with `food_enabled=False`. This Result-registry reward feeds
+   only the lifetime dopamine/plasticity circuit. Whether ES's fitness
+   should later also incorporate lifetime-accumulated reward is a separate,
+   open question — not decided here.
+
 **Status:** design only, empirically grounded (KC/MBON/DAN existence and
 connectivity verified against the real data above) but **nothing in this
 entry is implemented yet** — no `Percept`, no second circuit, no plasticity
