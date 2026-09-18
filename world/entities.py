@@ -33,6 +33,21 @@ class Threat:
 
 
 @dataclass
+class Item:
+    """A live instance of a player-created ItemType (world/items.py,
+    decisions.md #27) -- generic, single-use, stationary. Unlike Food/
+    Threat there's no separate name/behavior to configure: what happens
+    on contact comes entirely from `attributes` via the Result registry
+    (world/results.py), the same mechanism that already handles a plain
+    Food item.
+    """
+
+    position: Position
+    interaction_radius: float
+    attributes: np.ndarray
+
+
+@dataclass
 class Fly:
     id: int
     position: Position

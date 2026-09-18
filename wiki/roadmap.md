@@ -14,6 +14,7 @@ see #13 for why that was dropped.
 | Connectome exploration (`analyze`, `simulate` commands) | done |
 | `world/env.py` — multi-fly, continuous spawn-rate params, threat movement, anonymous `Percept` observation | done, tested (`decisions.md` #14, #15, #20, #25) |
 | `world/items.py`, `world/results.py` — item-encoding pipeline + Result registry | done, tested (`decisions.md` #24, #25); real `NomicItemEncoder` untested live (`huggingface.co` blocked here) |
+| Player-driven item creation — generic `Item`, `create_item` director action | **done, tested** (`decisions.md` #27) |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stage 1 only) |
@@ -82,14 +83,25 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     plasticity prior, never the parent's own lifetime-drifted gains
     (verified directly).
 
-#22 is now fully implemented (phases 1–4). Remaining, not yet started:
-an evolutionary process for the plasticity circuit's own prior/
-hyperparameters (currently untrained, gain=1.0); a dedicated audit CLI/
-visualization on top of the hooks now in place; the LLM-driven,
-player-extensible item-creation system discussed after #22 was first
-completed (parameterized director actions + a dynamic item registry in
-`Environment`, replacing the two fixed food/threat slots) — design not
-yet started.
+#22 is now fully implemented (phases 1–4).
+
+11. ~~Player-driven item creation~~ done, see `decisions.md` #27. A
+    generic, single-use, stationary `Item` (no special-cased behavior —
+    everything comes from its attribute vector via the existing
+    Percept/Result-registry machinery), a `create_item(description)`
+    director action (`director/`'s v1 contract's first parameterized
+    action, extended rather than replaced), `RuleBasedController`
+    handling it via a crude trigger phrase and `ClaudeController` via a
+    real `input_schema`. Verified end to end including through a live
+    `Colony`: a freshly player-created item sensed, picked up, and
+    correctly triggering `reinforce()`.
+
+Remaining, not yet started: an evolutionary process for the plasticity
+circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
+dedicated audit CLI/visualization on top of the hooks already in place;
+finer per-item behavior (movement, spawn-rate weighting) beyond the one
+shared default `create_item` currently gives every item — deliberately
+left simple, per #27.
 
 The frontend is a separate, independent track, also unblocked and not
 yet started (see "After that" below).

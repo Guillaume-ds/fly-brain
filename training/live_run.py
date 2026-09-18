@@ -78,16 +78,21 @@ def apply_requests(
 ) -> list[tuple[str, str | None]]:
     """Pure logic, no I/O -- testable without a real stdin/thread. Returns
     (request, action_name) per request, action_name is None if nothing
-    applied.
+    applied. `argument` (decisions.md #27) is passed through to the
+    action's fn only when that action declares takes_argument.
     """
     by_name = {action.name: action for action in actions}
     results: list[tuple[str, str | None]] = []
     for request in requests:
-        action_name = controller.choose_action(request, actions)
-        if action_name is not None and action_name in by_name:
-            by_name[action_name].fn()
-        else:
+        outcome = controller.choose_action(request, actions)
+        action_name = outcome[0] if outcome is not None else None
+        action = by_name.get(action_name) if action_name is not None else None
+        if action is None:
             action_name = None
+        elif action.takes_argument:
+            action.fn(outcome[1])
+        else:
+            action.fn()
         results.append((request, action_name))
     return results
 

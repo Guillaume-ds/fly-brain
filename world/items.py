@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -86,17 +87,39 @@ class NomicItemEncoder(ItemEncoder):
         return np.asarray(vector, dtype=np.float64)
 
 
+@dataclass(frozen=True)
+class ItemType:
+    """A registered, player- or developer-authored item type: a
+    description and its (unjittered) prototype vector, encoded once.
+    Not a grid entity itself -- see world/entities.py's `Item` for a
+    live spawned instance. `world/env.py`'s content authoring (food,
+    threats) and the player-driven item-creation system (decisions.md
+    #27) both produce these the same way.
+    """
+
+    description: str
+    attributes: np.ndarray
+
+
+def jitter(prototype: np.ndarray, sigma: float, rng: np.random.Generator) -> np.ndarray:
+    """The per-instance vector for a newly spawned item: a type's
+    prototype plus Gaussian noise, re-normalized to unit norm so every
+    downstream consumer can keep using plain cosine similarity (dot
+    product, since both operands stay unit-norm).
+    """
+    noise = rng.normal(0.0, sigma, size=prototype.shape)
+    return _normalize(prototype + noise)
+
+
 def encode_with_jitter(
     encoder: ItemEncoder, description: str, sigma: float, rng: np.random.Generator
 ) -> np.ndarray:
-    """The per-instance vector for a newly spawned item: the description's
-    prototype vector plus Gaussian jitter, re-normalized to unit norm so
-    every downstream consumer can keep using plain cosine similarity
-    (dot product, since both operands stay unit-norm).
+    """Encodes and jitters in one call. Prefer `jitter()` directly with an
+    already-encoded prototype when spawning many instances of the same
+    registered ItemType -- re-encoding the same description from scratch
+    on every spawn is wasteful, especially for a real (non-stub) encoder.
     """
-    prototype = encoder.encode(description)
-    noise = rng.normal(0.0, sigma, size=prototype.shape)
-    return _normalize(prototype + noise)
+    return jitter(encoder.encode(description), sigma, rng)
 
 
 def _normalize(vector: np.ndarray) -> np.ndarray:

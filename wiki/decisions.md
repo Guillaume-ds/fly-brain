@@ -1084,3 +1084,100 @@ untrained, gain=1.0, same fallback as the escape circuit); a dedicated
 audit CLI/visualization beyond the periodic log lines (the hooks
 `probe()`/`gain_drift()`/`plasticity_summary()` are there for one to be
 built on top of).
+
+## 27. Player-driven item creation: a generic `Item`, a parameterized director action
+
+**Context:** the original vision stated after #22 was completed —
+"an open World where the user can add items... by describing them to an
+LLM" — needed two things that didn't exist yet: a director action that
+takes a real argument (the v1 contract, #14, was zero-argument-only —
+anticipated but not built, per `claude_controller.py`'s original
+docstring), and a way for `Environment` to spawn item types beyond the
+two fixed slots (`food`, `threat`). Explicit instruction: keep it clean
+and simple.
+
+**Decision: one generic `Item`, not a configurable entity system.** A
+player-created item is stationary, single-use (consumed on contact,
+same as `Food`), and its entire behavior — what a fly perceives, what
+happens on contact — comes from its attribute vector via the exact same
+Percept/Result-registry mechanism `Food` already uses. Nothing about it
+is separately configurable (no movement, no custom radius, no instant-
+kill special case): a "dangerous" description just means high similarity
+to the `damage` Result concept, which already produces real harm through
+the existing health system (#25/#26) — no new mechanic needed. `Threat`
+was deliberately left untouched (still moves, still instant-kills on
+contact) — unifying it with the new generic `Item` would have been a
+bigger, riskier change to already-tested code for no benefit `Item`'s
+use case actually needs.
+
+**`world/items.py`** gained `ItemType` (a registered description + its
+unjittered prototype vector — the type-level record) and a standalone
+`jitter()` function extracted from `encode_with_jitter()` (which now
+just calls it). This let `Environment` cache the `food`/`threat`
+prototypes *once* at construction instead of re-encoding the same fixed
+description from scratch on every single spawn — a real inefficiency
+that existed since #25 and would have mattered a lot once a real
+(non-stub) encoder is in use; player-created item types get the same
+treatment for free. **`world/entities.py`** gained `Item` (position,
+interaction radius, attributes) — a live spawned instance, parallel to
+`Food`/`Threat`.
+
+**`Environment.add_item_type(description)`** is the actual entry point:
+encodes and registers a new `ItemType`, capped at `MAX_ITEM_TYPES = 20`
+(silently ignored past the cap — simple, no error-reporting channel back
+to the player exists to make anything fancier worthwhile). Spawning,
+sensing, and pickup all reuse existing generic machinery unchanged
+(`perceive()`, `apply_result()`) — extended in three small, symmetric
+places: `spawn_entities()` (one shared `item_spawn_rate`/`max_items`
+across *all* player-created types, not per-type — deliberately simple:
+more variety naturally means more stuff spawning overall, no per-type
+tuning surface), `observe()`, and a new `resolve_item_pickup()`
+paralleling `resolve_food_pickup()`.
+
+**`director/`'s v1 contract is extended, not replaced.** `ActionSpec`
+gained `takes_argument: bool = False`; the three existing zero-argument
+actions are unaffected. `create_item` is the fifth action, wrapping
+`env.add_item_type` directly. `WorldController.choose_action()`'s return
+type changed from `str | None` to `tuple[str, str | None] | None` (name,
+argument) — a clean break across both controllers, no backward-compat
+shim, consistent with this project's stated anti-pattern list.
+`RuleBasedController` handles it the same crude way as everything else
+it does: a fixed trigger phrase (`"create item:"` / `"add item:"` /
+`"new item:"`), everything after it taken verbatim as the description —
+no attempt at real language understanding, matching its own documented
+role. `ClaudeController` gets a real `input_schema` for `create_item`
+(`{"description": "string"}`, `required`) instead of an empty one, and
+extracts `block.input["description"]` from the tool-use response — the
+first action to actually exercise the parameterized-tool-use path the
+controller was built to support from the start.
+
+**Verified:**
+- `Environment`-level: `add_item_type()` registers correctly, spawning
+  respects `max_items`, a forced adjacent item is sensed as a `Percept`
+  and, on pickup, produces real `Δhealth` via the Result registry (a
+  "smelly, poisonous meat" item dropped a fly's health 66→31) — same
+  mechanism already verified for `Food`, now confirmed for a
+  player-created type too. `MAX_ITEM_TYPES` cap confirmed at 20 after
+  registering 25.
+- `RuleBasedController` correctly extracts the description from
+  `"create item: a smelly poisonous piece of meat"` and routes it to
+  `create_item`; `ClaudeController`'s tool schema confirmed to carry a
+  real `description` string parameter or an empty one depending on
+  `takes_argument`.
+- Full `training/live_run.py` CLI, piped stdin: `create_item` fires
+  correctly alongside the pre-existing rate actions in the same
+  session, live loop keeps running normally afterward.
+- Full `Colony` pipeline, unambiguously: a player-created item sensed
+  (but out of pickup range) for several ticks builds a real KC
+  eligibility trace with zero reinforcement events; once moved into
+  pickup range, a single real pickup fires (hunger 47→98) and
+  `reinforce()` correctly updates gain (`gain_drift` 0.0 → 0.0028) —
+  the entire chain (item creation → spawn → sense → pickup → Result
+  blend → real state delta → `Colony` diff → dopamine-gated update)
+  confirmed working end to end on a freshly created item type, not just
+  the pre-existing `food`/`threat` types.
+
+**Left open, as before:** who decides an item's finer behavior (spawn
+rate weighting, whether it should ever move) beyond the one shared
+default is still an open question if it comes up later — deliberately
+not addressed now, per "keep it simple."

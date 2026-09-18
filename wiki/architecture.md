@@ -23,25 +23,31 @@ verified before being wired together.
 
 ## `world/` — the game
 
-- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`
-  (each carrying an `attributes` item vector, see `items.py` below),
-  `Fly` (id, position, hunger, `health`, `stuck_ticks`,
-  `vulnerable_ticks_left`). No behavior, just data.
-- **`items.py`** (`decisions.md` #22/#24) — the content-authoring
-  pipeline that turns a short text description into an item instance's
-  small, fixed-dimension attribute vector: `ItemEncoder` is a swap point
-  (same pattern as `director/`'s `WorldController`) — `NomicItemEncoder`
-  is the real backend (local, frozen `nomic-embed-text-v1.5`,
+- **`entities.py`** — plain dataclasses: `Position`, `Food`, `Threat`,
+  `Item` (each carrying an `attributes` item vector, see `items.py`
+  below; `Item` is the generic, player-created kind, `decisions.md` #27
+  — stationary, single-use, no special-cased behavior beyond what its
+  attribute vector produces through the Result registry), `Fly` (id,
+  position, hunger, `health`, `stuck_ticks`, `vulnerable_ticks_left`).
+  No behavior, just data.
+- **`items.py`** (`decisions.md` #22/#24/#27) — the content-authoring
+  pipeline that turns a short text description into an item's small,
+  fixed-dimension attribute vector: `ItemEncoder` is a swap point (same
+  pattern as `director/`'s `WorldController`) — `NomicItemEncoder` is
+  the real backend (local, frozen `nomic-embed-text-v1.5`,
   Matryoshka-truncated), **not exercised live in this dev environment**
   (`huggingface.co` is policy-blocked here, same situation as
   `ClaudeController` with no API credentials); `HashingItemEncoder` is a
   zero-dependency, deterministic stub (feature hashing over character
   trigrams — orthographic, not semantic) used to test everything
   downstream without network access, and what every CLI entry point
-  actually runs today. `encode_with_jitter()` adds per-instance Gaussian
-  noise and re-normalizes to unit norm, so every downstream consumer can
-  use plain cosine similarity. Entirely a content-authoring concern —
-  never exposed to a fly.
+  actually runs today. `ItemType` is a registered description + its
+  unjittered prototype vector, encoded once; `jitter()` applies
+  per-instance Gaussian noise to an already-encoded prototype at spawn
+  time (re-normalized to unit norm) — `Environment` caches `food`/
+  `threat`/player-created prototypes once each rather than re-encoding
+  the same fixed description on every spawn. Entirely a
+  content-authoring concern — never exposed to a fly.
 - **`results.py`** (`decisions.md` #22 part 5, #25) — the Result
   registry: a small, fixed set of real mechanical outcomes
   (`food`→`hunger`, `damage`→`health`, `immobilize`→`stuck_ticks`), each
@@ -51,14 +57,21 @@ verified before being wired together.
   nourishing and damaging at once. The one place in this system that's
   deliberately discrete rather than open-ended, on purpose.
 - **`env.py`** — the `Environment` class, multi-fly: `self.flies:
-  list[Fly]` share one grid, one set of spiders/food, one hunger clock
-  each. Food and threats spawn continuously (not placed once at reset) at
-  `spider_spawn_rate`/`food_spawn_rate`, each stamped with an item vector
-  from `items.py` at spawn time, and threats wander
-  (`threat_move_probability` chance of a random step per tick) — both
-  needed for the escape circuit to have real, ongoing pressure to react
-  to rather than a one-time, permanently-dodgeable placement (see
-  `decisions.md` #14, #15). Picking up food no longer just restores
+  list[Fly]` share one grid, one set of spiders/food/player-created
+  items, one hunger clock each. Food and threats spawn continuously (not
+  placed once at reset) at `spider_spawn_rate`/`food_spawn_rate`, each
+  stamped with an item vector from `items.py` at spawn time, and threats
+  wander (`threat_move_probability` chance of a random step per tick) —
+  both needed for the escape circuit to have real, ongoing pressure to
+  react to rather than a one-time, permanently-dodgeable placement (see
+  `decisions.md` #14, #15). `add_item_type(description)` (`decisions.md`
+  #27) is the player-driven item-creation entry point — registers a new
+  `ItemType`, capped at `MAX_ITEM_TYPES`; every registered type then
+  spawns as a generic, stationary, single-use `Item` at one shared
+  `item_spawn_rate`/`max_items`, sensed and picked up through the exact
+  same `perceive()`/`apply_result()` machinery as `Food` — no new
+  mechanic needed, since what an item *does* was already fully general
+  (`decisions.md` #25). Picking up food/an item doesn't just restore
   hunger by a fixed amount — `apply_result()` runs the item's attribute
   vector through the Result registry and applies whatever real
   `hunger`/`health`/`stuck_ticks` deltas come out. A fly with
@@ -215,18 +228,27 @@ Sits on top of `Environment`, not on top of the fly. A player's request
 gets translated into at most one call against a fixed action registry —
 see `decisions.md` #16 for why each piece is split the way it is.
 
-- **`actions.py`** — the registry: `ActionSpec(name, description, fn)`
-  wrapping `Environment.increase_/decrease_spider_rate` and
-  `increase_/decrease_food_rate`. No LLM-specific code — doesn't know
-  Claude or any other provider exists.
+- **`actions.py`** — the registry: `ActionSpec(name, description, fn,
+  takes_argument=False)` wrapping `Environment.increase_/
+  decrease_spider_rate`, `increase_/decrease_food_rate`, and (since
+  `decisions.md` #27) `create_item` — the first action with
+  `takes_argument=True`, wrapping `Environment.add_item_type` directly.
+  No LLM-specific code — doesn't know Claude or any other provider
+  exists.
 - **`base.py`** — `WorldController`, a one-method interface
-  (`choose_action(request, actions) -> action name or None`). This is the
-  entire swap point.
+  (`choose_action(request, actions) -> (action name, argument) or None`).
+  This is the entire swap point. `argument` only matters when that
+  action's `takes_argument` is True.
 - **`rule_based_controller.py`** — zero-dependency keyword-match backend,
   used to test the registry/`Environment` wiring for free before any real
-  model is involved.
-- **`claude_controller.py`** — the reference LLM backend: real tool-use
-  (each action is a zero-argument tool), not free-text parsing.
+  model is involved. Handles `create_item` the same crude way as
+  everything else it does: a fixed trigger phrase (`"create item:"` etc.),
+  everything after it taken verbatim as the description.
+- **`claude_controller.py`** — the reference LLM backend: real tool-use,
+  not free-text parsing. `create_item` is the first tool with a real
+  `input_schema` (a `description` string) instead of an empty one — the
+  parameterized-tool-use path the controller was built to support from
+  the start, now actually exercised.
 
 ## Data flow through one tick (per fly)
 
@@ -249,8 +271,10 @@ EscapeAgent.act(Observation)      (that fly's own circuit/gains)
 
 (Curriculum training always runs a population of 1, so this collapses to
 exactly one fly per tick, same shape as before multi-fly support existed.
-A live colony repeats this per living fly each tick — driving each fly
-with its own circuit/genome is `training/colony.py`'s job, not yet built.)
+A live colony repeats this per living fly each tick, and also runs the
+plasticity circuit alongside the escape circuit shown here — see
+`training/colony.py` above and `decisions.md` #26 for how the two
+combine.)
 
 ## How a player's request changes the world
 
@@ -259,10 +283,12 @@ player request (free text)
         |
 WorldController.choose_action(request, registry)   <- Claude, rule-based, or any future backend
         |
-   action name (or None)
+   (action name, argument) or None
         |
-   registry[name].fn()   -> Environment.increase_/decrease_*_rate()
+   registry[name].fn()            -> Environment.increase_/decrease_*_rate()
+   registry[name].fn(argument)    -> Environment.add_item_type(description)   [decisions.md #27]
         |
         v
-  spider_spawn_rate / food_spawn_rate  ->  affects every future _spawn_tick()
+  spider_spawn_rate / food_spawn_rate  ->  affects every future spawn_entities()
+  a new ItemType                       ->  starts spawning as a generic Item
 ```

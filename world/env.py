@@ -26,12 +26,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .entities import Fly, Food, Position, Threat
-from .items import HashingItemEncoder, ItemEncoder, encode_with_jitter
+from .entities import Fly, Food, Item, Position, Threat
+from .items import HashingItemEncoder, ItemEncoder, ItemType, jitter
 from .results import ResultConcept, build_default_results, blend_deltas
 
 SPAWN_RATE_BOUNDS = (0.0, 0.2)  # min/max per-tick spawn probability
 SPAWN_RATE_STEP = 0.02  # fixed nudge used by increase_*/decrease_*
+MAX_ITEM_TYPES = 20  # cap on how many distinct player-created item types can exist, see decisions.md #27
 
 
 class Action(enum.IntEnum):
@@ -103,6 +104,9 @@ class Environment:
         food_description: str = "a nourishing piece of food",
         threat_description: str = "a fast, venomous spider",
         item_jitter_sigma: float = 0.05,
+        item_radius: float = 2.0,
+        item_spawn_rate: float = 0.02,
+        max_items: int = 15,
         seed: int | None = None,
     ) -> None:
         self.grid_size = grid_size
@@ -126,20 +130,40 @@ class Environment:
         self.max_health = max_health
         self.max_stuck_ticks = max_stuck_ticks
         self.encoder = encoder or HashingItemEncoder()
-        self.food_description = food_description
-        self.threat_description = threat_description
         self.item_jitter_sigma = item_jitter_sigma
+        self.item_radius = item_radius
+        self.item_spawn_rate = item_spawn_rate
+        self.max_items = max_items
         self.results: list[ResultConcept] = build_default_results(
             self.encoder, max_hunger=self.max_hunger, max_health=self.max_health, max_stuck_ticks=self.max_stuck_ticks,
         )
+        # prototypes encoded once -- spawning only jitters them, never
+        # re-encodes the same fixed description from scratch every time
+        self.food_type = ItemType(food_description, self.encoder.encode(food_description))
+        self.threat_type = ItemType(threat_description, self.encoder.encode(threat_description))
+        self.item_types: list[ItemType] = []  # player-created, see add_item_type()
         self.rng = np.random.default_rng(seed)
 
         self.flies: list[Fly]
         self.food: list[Food]
         self.threats: list[Threat]
+        self.items: list[Item]
         self.tick: int
         self.next_fly_id: int
         self.reset()
+
+    def add_item_type(self, description: str) -> None:
+        """The player-facing item-creation entry point (decisions.md
+        #27) -- director/'s create_item action wraps this directly. How
+        flies perceive and react to the resulting item is determined
+        entirely by `description`'s attribute vector, via the same
+        Percept/Result-registry mechanism as food -- nothing else about
+        it is configurable, on purpose (decisions.md #27: keep it
+        simple). Silently capped at MAX_ITEM_TYPES.
+        """
+        if len(self.item_types) >= MAX_ITEM_TYPES:
+            return
+        self.item_types.append(ItemType(description, self.encoder.encode(description)))
 
     # director-facing controls -- see wiki/decisions.md #14 for why these
     # are fixed, bounded nudges rather than taking a magnitude argument.
@@ -160,6 +184,7 @@ class Environment:
         self.next_fly_id = 0
         self.food = []
         self.threats = []
+        self.items = []
         self.flies = []
         for _ in range(self.initial_population):
             self.flies.append(self.spawn_fly(self.random_empty_cell(self.occupied_cells())))
@@ -182,6 +207,7 @@ class Environment:
         self.move_threats()
         self.spawn_entities()
         self.resolve_food_pickup()
+        self.resolve_item_pickup()
         births = self.resolve_reproduction()
         deaths = self.resolve_deaths()
 
@@ -218,6 +244,7 @@ class Environment:
         cells = {(fly.position.x, fly.position.y) for fly in self.flies}
         cells.update((f.position.x, f.position.y) for f in self.food)
         cells.update((t.position.x, t.position.y) for t in self.threats)
+        cells.update((i.position.x, i.position.y) for i in self.items)
         return cells
 
     def move_flies(self, actions: dict[int, Action]) -> None:
@@ -242,11 +269,15 @@ class Environment:
 
     def spawn_entities(self) -> None:
         if len(self.threats) < self.max_spiders and self.rng.random() < self.spider_spawn_rate:
-            attributes = encode_with_jitter(self.encoder, self.threat_description, self.item_jitter_sigma, self.rng)
+            attributes = jitter(self.threat_type.attributes, self.item_jitter_sigma, self.rng)
             self.threats.append(Threat(self.random_empty_cell(self.occupied_cells()), self.threat_radius, attributes))
         if len(self.food) < self.max_food and self.rng.random() < self.food_spawn_rate:
-            attributes = encode_with_jitter(self.encoder, self.food_description, self.item_jitter_sigma, self.rng)
+            attributes = jitter(self.food_type.attributes, self.item_jitter_sigma, self.rng)
             self.food.append(Food(self.random_empty_cell(self.occupied_cells()), self.food_radius, attributes))
+        if self.item_types and len(self.items) < self.max_items and self.rng.random() < self.item_spawn_rate:
+            item_type = self.item_types[int(self.rng.integers(0, len(self.item_types)))]
+            attributes = jitter(item_type.attributes, self.item_jitter_sigma, self.rng)
+            self.items.append(Item(self.random_empty_cell(self.occupied_cells()), self.item_radius, attributes))
 
     def resolve_food_pickup(self) -> None:
         for fly in self.flies:
@@ -254,6 +285,14 @@ class Environment:
                 if fly.position.distance_to(food.position) <= food.pickup_radius:
                     self.apply_result(fly, food.attributes)
                     self.food.remove(food)
+                    break
+
+    def resolve_item_pickup(self) -> None:
+        for fly in self.flies:
+            for item in self.items:
+                if fly.position.distance_to(item.position) <= item.interaction_radius:
+                    self.apply_result(fly, item.attributes)
+                    self.items.remove(item)
                     break
 
     def apply_result(self, fly: Fly, attributes: np.ndarray) -> None:
@@ -345,6 +384,10 @@ class Environment:
                 nearby.append(percept)
         for threat in self.threats:
             percept = self.perceive(fly.position, threat.position, threat.attributes, self.threat_radius)
+            if percept is not None:
+                nearby.append(percept)
+        for item in self.items:
+            percept = self.perceive(fly.position, item.position, item.attributes, self.item_radius)
             if percept is not None:
                 nearby.append(percept)
         return Observation(nearby=nearby, hunger=fly.hunger / self.max_hunger)

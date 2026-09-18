@@ -3,7 +3,8 @@
 Uses real tool-use (the model picks one action from the registry, or
 none) rather than parsing free-text output. Costs nothing extra for v1's
 zero-argument actions and pays off the moment a future action needs a
-real argument (e.g. a spawn location) -- see wiki/decisions.md.
+real argument -- that moment is `create_item` (decisions.md #27), the
+first action with a real input_schema instead of an empty one.
 
 Requires the `anthropic` package and API credentials (ANTHROPIC_API_KEY,
 or any other source the SDK resolves automatically). Not exercised
@@ -32,7 +33,15 @@ def build_tool_definitions(actions: list[ActionSpec]) -> list[dict]:
         {
             "name": action.name,
             "description": action.description,
-            "input_schema": {"type": "object", "properties": {}, "required": []},
+            "input_schema": (
+                {
+                    "type": "object",
+                    "properties": {"description": {"type": "string"}},
+                    "required": ["description"],
+                }
+                if action.takes_argument
+                else {"type": "object", "properties": {}, "required": []}
+            ),
         }
         for action in actions
     ]
@@ -42,7 +51,7 @@ class ClaudeController(WorldController):
     def __init__(self, client: anthropic.Anthropic | None = None) -> None:
         self.client = client or anthropic.Anthropic()
 
-    def choose_action(self, request: str, actions: list[ActionSpec]) -> str | None:
+    def choose_action(self, request: str, actions: list[ActionSpec]) -> tuple[str, str | None] | None:
         response = self.client.messages.create(
             model=MODEL,
             max_tokens=256,
@@ -54,5 +63,6 @@ class ClaudeController(WorldController):
 
         for block in response.content:
             if block.type == "tool_use":
-                return block.name
+                argument = (block.input or {}).get("description")
+                return block.name, argument
         return None
