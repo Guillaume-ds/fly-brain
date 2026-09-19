@@ -314,6 +314,35 @@ see `decisions.md` #16 for why each piece is split the way it is.
   parameterized-tool-use path the controller was built to support from
   the start, now exercised by three real multi-field schemas.
 
+## `server/` — the FastAPI+WebSocket layer
+
+`decisions.md` #44. Wraps `game/live_run.py`'s exact loop (a
+continuously-ticking `Colony` driven by a swappable `director/`
+controller) behind a WebSocket instead of stdin/print — depends on
+`game.live_run` (reuses `apply_requests()` directly), nothing depends on
+it back, kept as its own top-level package for that reason, the same as
+`director/`/`training/`.
+
+- **`serialize.py`** — pure functions, no FastAPI/WebSocket import at
+  all: `Environment`/`ColonyStepResult` → the wire-format dicts.
+  `serialize_world_init()` (grid/limits/registered types, once per
+  connection), `serialize_tick()` (full state every tick — flies, items,
+  tiles, mobs, corpses, death/birth/extinction events). Built from the
+  real object graph, never a fly's own `Percept`/`Observation` — a human
+  player isn't bound by the anonymity contract (`decisions.md` #22), and
+  `Item`/`Tile`/`Mob`/`Corpse`'s `id`/`type_name` (`decisions.md` #43)
+  exist specifically for this consumer.
+- **`app.py`** — `AppState` (one shared `Colony`/`WorldController`/
+  action registry per server process, plus the set of connected
+  sockets); `create_app(state=None)` builds a `FastAPI` app with a
+  `/ws` endpoint (`world_init` on connect, then `join`/`player_request`
+  in, `joined`/`request_result`/`tick` out) and a background `tick_loop`
+  task started via the app's `lifespan`. `state=None` builds the real
+  default (real connectome, real ES checkpoint) — tests inject a cheap
+  `AppState` instead, the same discipline `fly_brain`'s own test fixtures
+  already use. `python -m server.app` runs it directly; `uvicorn
+  server.app:app` is the standard alternative.
+
 ## Data flow through one tick (per fly)
 
 ```

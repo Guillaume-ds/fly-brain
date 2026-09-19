@@ -7,3 +7,7 @@ tqdm>=4.66
 anthropic>=0.40
 sentence-transformers>=3.0  # NomicItemEncoder (world/items.py) -- needs huggingface.co access, see wiki/decisions.md #24
 pytest>=8.0  # contract tests, see tests/ and wiki/world.md
+fastapi>=0.110  # server/ -- the WebSocket layer, see wiki/decisions.md #44
+uvicorn[standard]>=0.29  # ASGI server for server/app.py
+websockets>=12.0  # live verification / a real client, not just server/'s own TestClient-based tests
+httpx>=0.27  # fastapi.testclient.TestClient's transport

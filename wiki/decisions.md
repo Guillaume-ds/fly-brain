@@ -2871,3 +2871,93 @@ counter; the counter resets with the environment; and the one test that
 actually matters — `id`/`type_name` never appear on a `Percept`,
 `Observation.nearby` stays exactly `{attributes, dx, dy, distance}`
 regardless. 128 tests passing total.
+
+## 44. FastAPI + WebSocket server, wrapping `game/live_run.py`'s loop
+
+**Context:** decisions.md #19's deferred frontend track — its
+precondition (reproduction + a live director loop) met since #20/#23,
+the wire-format contract designed in conversation and grounded in real
+code, the entity `id`/`type_name` gaps it surfaced fixed in #43. This
+entry is the actual server.
+
+**New package `server/`** (`serialize.py`, `app.py`), deliberately not
+inside `game/`: it depends on `game.live_run` (reuses `apply_requests()`
+directly rather than reimplementing request handling) but nothing in
+`game/`/`world/`/`fly_brain/` depends on it back — a one-way dependency,
+kept as its own top-level package the same way `director/`/`training/`
+already are.
+
+**`serialize.py` is pure** — no FastAPI/WebSocket import at all, just
+functions turning `Environment`/`ColonyStepResult` into the wire-format
+dicts agreed on: `serialize_world_init()` (grid/limits/registered
+types, sent once per connection), `serialize_tick()` (full state every
+tick: flies, items, tiles, mobs, corpses, death/birth/extinction
+events). Built from `Environment`'s real object graph — `env.flies`,
+`env.items`, etc. — never from a fly's own `Observation`/`Percept`; a
+human player watching the game isn't bound by decisions.md #22's
+anonymity contract, and #43's `id`/`type_name` fields exist specifically
+for this consumer. Pinned with a dedicated test that a `Percept`
+constructed via `env.observe()` still carries neither field, regardless.
+
+**One shared `Colony` per server process, broadcast to every connected
+client** — not one world per connection, matching "two players share
+one world" (#13). A client identifies itself via a `join` message
+(`{owner}`); the server calls `Colony.add_colony()` (the exact mechanism
+#34/#35 already built for a second owner) for a name it hasn't seen,
+and treats an existing owner's `join` as a no-op. `player_request`
+(`{owner, text}`) maps directly onto `game.live_run.apply_requests()`,
+reused unmodified — the frontend just forwards free text, exactly like
+typing into the CLI today, and gets back the same `(text, status)` pair
+`apply_requests()` already returns, as a `request_result` message.
+
+**No thread, unlike `live_run.py`'s stdin reader.** Everything runs on
+one asyncio event loop: the tick loop and each connection's receive loop
+are separate tasks, but `Colony.step()` and `apply_requests()` are both
+synchronous with no `await` inside them, so once a task starts running
+either, it runs to completion before anything else on the loop gets a
+turn. Safe without any locking, and it means requests apply immediately
+on receipt rather than needing `live_run.py`'s queue-and-drain pattern,
+which existed specifically to bridge a real OS thread (blocking stdin)
+into the main loop — nothing here blocks the loop that way.
+
+**A real bug found by testing this, not by inspection:** the tick loop
+originally stepped the colony immediately on start, then slept. Since
+the background task begins as soon as the server's lifespan starts --
+which can be before any client has connected at all -- a death or birth
+on tick 1 could be broadcast to zero listeners and be gone forever; no
+later tick would ever re-report it, since `ColonyStepResult.deaths`/
+`births` are per-tick, not cumulative. Caught by a test that killed a
+fly before connecting and asserted the death showed up in the first
+`tick` message — it didn't, because the loop had already ticked past it
+before the test's socket registered. Fixed by sleeping before stepping,
+not after: every freshly-started server now gives a full `tick_interval`
+of grace before the world can change, rather than none.
+
+**Verified live, real production config, not just the test harness:**
+started the actual server (`python -m server.app`, real connectome, real
+`stage1_clean_escape.npy` checkpoint, real `RuleBasedController`) and
+drove it with a real `websockets` client -- `world_init` arrived with
+the real registered types; `join` for a new owner produced real flies
+for that owner in the next `tick`; `player_request` "more spiders" was
+understood, applied, and acked; consecutive `tick` messages showed a
+real fly actually moving (`x: 9 → 10`) and hunger actually decaying
+(`6 → 5`) between them.
+
+**Not yet done, deliberately out of scope here:** the Next.js/Phaser
+frontend itself. `server/` only proves the backend half of the contract
+works end to end; nothing has rendered a pixel yet.
+
+Tests: `tests/test_serialize.py` (new, 5 tests) — world_init includes
+both built-in and player-created types with their real names, never a
+`Percept`-shaped attribute vector; tick payloads carry real positions/
+stats and real item/tile/corpse names; death/birth/extinction events
+come through. `tests/test_server.py` (new, 9 tests) — world_init on
+connect; join spawns a new owner's colony and no-ops for an existing
+one; a join without an owner errors; a player_request applies and acks,
+including the "nothing matched" case; an unknown message type errors;
+a live tick broadcasts real state; a death shows up in tick events (the
+regression this entry's own bug produced). Both new files build a cheap
+`AppState` directly rather than the real `build_state()`, the same
+"don't pay for the real connectome/checkpoint in every test" discipline
+already used elsewhere (`tests/test_wander.py`'s `templates` fixture).
+142 tests passing total.

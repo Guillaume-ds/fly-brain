@@ -38,7 +38,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37), hunger-loss punishment (#38), sensing radius (#39), and evolved wander (#40) are all fixed now — every piece the design called for is in place; a real, longer colony-scale foraging run hasn't been done yet to confirm it all adds up in practice |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
-| Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19) — its precondition (reproduction + a live director loop) has been met since #20/#23. Wire-format contract designed (`tick`/`world_init` broadcasts built from `Environment`'s real object graph, `player_request`/`request_result` mapping directly onto `game/live_run.py`'s existing `apply_requests()`); the `Item`/`Tile`/`Mob`/`Corpse` id/type_name fields it needs are done (`decisions.md` #43). The FastAPI+WebSocket server and the Next.js/Phaser frontend itself are not started |
+| Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **backend done and tested** (`decisions.md` #44) — new `server/` package (`serialize.py`, `app.py`) wraps `game/live_run.py`'s exact loop behind a WebSocket, one shared `Colony` broadcast to every connection; verified live against the real connectome/checkpoint with a real `websockets` client, not just the test harness. Only the Next.js/Phaser frontend itself remains, not started |
 
 ## Immediate next steps, in order
 
@@ -317,20 +317,26 @@ yet started (see "After that" below).
   randomly-generated terrain, plus the spiderweb v2 mechanic (spiders drop
   webs on death; web = distinct immobilize effect, not instant death).
   Comes only after the above is proven out (`decisions.md` #9).
-- **Frontend** — FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3
-  rendering (`decisions.md` #19). The core Python game loop it was
-  deferred until (reproduction mechanic + a live director loop) is now
-  done (`decisions.md` #23). Wire-format contract designed: a `tick`
-  broadcast built from `Environment`'s real object graph (never a fly's
-  own anonymous `Percept`/`Observation` -- a human player isn't bound by
-  #22's anonymity contract), and `player_request`/`request_result`
-  messages mapping directly onto `game/live_run.py`'s existing
-  `apply_requests()` -- the frontend just forwards free text, exactly
-  like typing into the CLI today. That design surfaced two real gaps,
-  now fixed: entities had no stable id or real type name to serialize
-  (`decisions.md` #43, `Item`/`Tile`/`Mob`/`Corpse` gained both). Still
-  not started: the actual FastAPI+WebSocket server, and the Next.js/
-  Phaser frontend itself.
+- ~~FastAPI+WebSocket server~~ done, see `decisions.md` #44. New
+  `server/` package wraps `game/live_run.py`'s exact loop (a
+  continuously-ticking `Colony` driven by a swappable `director/`
+  controller) behind a WebSocket instead of stdin/print --
+  `serialize.py` is pure (`Environment`/`ColonyStepResult` -> the agreed
+  wire-format dicts, built from the real object graph, never a fly's own
+  `Percept`/`Observation`); `app.py` is one shared `Colony` per process
+  broadcast to every connected client, `join` spawning a new owner's
+  colony via the exact mechanism #34/#35 already built, `player_request`
+  mapping straight onto `apply_requests()` reused unmodified. No thread
+  needed (unlike `live_run.py`'s stdin reader) -- one asyncio loop is
+  enough since `Colony.step()`/`apply_requests()` are both synchronous
+  with no `await` inside them. Caught and fixed a real bug via testing:
+  the tick loop originally stepped before sleeping, so a death/birth on
+  tick 1 could broadcast to zero listeners and be gone forever, before
+  any client had a chance to connect. Verified live against the real
+  connectome/checkpoint with a real `websockets` client, not just the
+  test harness. Still not started: the Next.js/Phaser frontend itself --
+  `server/` only proves the backend half of the contract, nothing has
+  rendered a pixel yet.
 - **Structure/effect split for items, threats, and tiles** — separating
   *what moves/is consumed/occupies an area* (structure, discrete,
   tool-selected) from *what it does to a fly* (effect, continuous,
