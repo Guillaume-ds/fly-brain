@@ -38,6 +38,7 @@ def test_world_init_includes_built_in_and_player_created_types(env):
     data = serialize_world_init(env)
 
     assert data["grid_size"] == env.grid_size
+    assert data["max_energy"] == env.max_energy
     item_names = {t["name"] for t in data["item_types"]}
     assert item_names == {"food", "poison meat"}
     mob_names = {t["name"] for t in data["mob_types"]}
@@ -72,6 +73,7 @@ def test_tick_includes_real_positions_and_stats(env):
     assert payload["y"] == fly.position.y
     assert payload["hunger"] == fly.hunger
     assert payload["owner"] == OWNER
+    assert data["energy"] == {OWNER: pytest.approx(env.energy[OWNER])}
 
 
 def test_tick_serializes_items_tiles_corpses_with_real_names(env):

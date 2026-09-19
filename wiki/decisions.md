@@ -2961,3 +2961,78 @@ regression this entry's own bug produced). Both new files build a cheap
 "don't pay for the real connectome/checkpoint in every test" discipline
 already used elsewhere (`tests/test_wander.py`'s `templates` fixture).
 142 tests passing total.
+
+## 45. The frontend, first iteration: Next.js + Phaser client
+
+**Context:** the last piece of decisions.md #19's deferred track. Asked
+to plan and ask questions before building, rather than just building —
+the design fork worth settling first was scope, not mechanics: the
+wire contract (#44) already dictates most of what the client has to do.
+
+**Three scope decisions made explicit before writing any frontend
+code, not assumed:**
+1. **Visual style: simple colored shapes, not sprite art.** Flies as
+   circles (color = owner, white ring = "you"), items/tiles/mobs/
+   corpses as colored squares (green/blue/red/gray). No asset sourcing
+   blocking anything from rendering — matches this project's standing
+   "prove the simple version first" discipline, same reasoning as every
+   earlier "placeholder, not tuned/art'd yet" decision.
+2. **Interaction scope: one interactive owner + spectator, not a
+   multi-owner switcher.** On load: pick a name, `join`, get a request
+   box, watch the whole world including any other owners already in it.
+   A UI-level multi-owner switcher is real scope for two people actually
+   testing together, not for building alone.
+3. **HUD: tick/population counters, per-fly hover tooltip, request/
+   event log, energy meter** — all four asked for, all four built.
+
+**A real gap the HUD requirements surfaced: `Environment.energy` was
+never part of the wire contract at all.** #44 defined `world_init`/
+`tick` without it — not an oversight caught by inspection, caught by
+actually needing to build the energy meter. Added `max_energy` to
+`world_init` and `energy: dict[str, float]` (per-owner, decisions.md
+#33) to every `tick` payload, in `server/serialize.py`, with tests
+before writing the meter itself.
+
+**New `frontend/` package** (Next.js 16, App Router, TypeScript,
+Tailwind, Phaser 3 — `create-next-app`, not hand-rolled scaffolding).
+`lib/protocol.ts` mirrors the wire format field-for-field, by hand (no
+shared schema generator yet — a real follow-up once the contract
+stabilizes further). `lib/useGameSocket.ts` owns the one WebSocket
+connection and exposes plain React state; every component downstream
+of it has no idea a wire format exists. `components/GameCanvas.tsx`
+redraws the whole grid from scratch every tick — deliberately no
+incremental diffing, matching the wire contract's own "full state, not
+a diff" choice (#44) — with hover detection done as plain pointer-
+position math against the latest tick's fly list rather than a Phaser
+input object per fly, in keeping with a "simple shapes" v1.
+
+**Verified live, not just built and typechecked:** ran the real
+backend (`python -m server.app`, real connectome/checkpoint) and the
+real frontend dev server together, drove the browser with Playwright
+(pre-installed in this environment) rather than trusting a clean
+`npm run build`/`tsc --noEmit` alone. Confirmed, with screenshots: the
+join flow; live tick data actually rendering (flies moving, hunger
+bars draining between ticks); a real `player_request` ("more food")
+applying and showing up in the log as `"more food" -> increase_food_
+rate`; a real death (`fly #N died (threat)`) appearing in the log the
+same tick the population count dropped; the hover tooltip rendering a
+fly's live owner/hunger/health. The one snag hit along the way was a
+red herring worth recording: a grid-sweep test script missed every fly
+because its own step size skipped the exact row they were on — not a
+hover-detection bug, confirmed by re-deriving the fly's real position
+from a debug log and hovering it directly, which worked on the first
+try.
+
+**Not done, deliberately out of scope for this entry:** real sprite
+art; a multi-owner switcher in one client; incremental tick diffing;
+a shared TypeScript/Python schema source for the wire format instead of
+hand-mirrored types. All flagged, none blocking a first playable
+iteration.
+
+Tests: `tests/test_serialize.py` extended (2 assertions) for
+`max_energy`/`energy` now being part of the contract. No new frontend
+test suite yet — verified via the live Playwright run above rather than
+an automated one; a real frontend test setup (Playwright/Vitest) is a
+reasonable next addition once the UI shape settles further, not before.
+142 Python tests passing total; frontend passes `next lint`, `tsc
+--noEmit`, and `next build` clean.

@@ -47,6 +47,7 @@ def serialize_world_init(env: Environment) -> dict[str, Any]:
         "max_hunger": env.max_hunger,
         "max_health": env.max_health,
         "max_stuck_ticks": env.max_stuck_ticks,
+        "max_energy": env.max_energy,
         "owners": list(env.owners),
         "item_types": [serialize_item_type(t) for t in (env.food_type, *env.item_types)],
         "tile_types": [serialize_item_type(t) for t in env.tile_types],
@@ -90,6 +91,7 @@ def serialize_tick(env: Environment, result: ColonyStepResult) -> dict[str, Any]
         "tiles": [serialize_entity(tile) for tile in env.tiles],
         "mobs": [serialize_entity(mob) for mob in env.mobs],
         "corpses": [serialize_entity(corpse) for corpse in env.corpses],
+        "energy": dict(env.energy),  # per-owner (decisions.md #33) -- what a player can currently afford to spend
         "events": {
             "deaths": [{"fly_id": fly_id, "cause": cause} for fly_id, cause in result.deaths.items()],
             "births": [{"new_id": new_id, "parent_id": parent_id} for new_id, parent_id in result.births.items()],

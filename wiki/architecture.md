@@ -325,13 +325,16 @@ it back, kept as its own top-level package for that reason, the same as
 
 - **`serialize.py`** — pure functions, no FastAPI/WebSocket import at
   all: `Environment`/`ColonyStepResult` → the wire-format dicts.
-  `serialize_world_init()` (grid/limits/registered types, once per
-  connection), `serialize_tick()` (full state every tick — flies, items,
-  tiles, mobs, corpses, death/birth/extinction events). Built from the
-  real object graph, never a fly's own `Percept`/`Observation` — a human
-  player isn't bound by the anonymity contract (`decisions.md` #22), and
-  `Item`/`Tile`/`Mob`/`Corpse`'s `id`/`type_name` (`decisions.md` #43)
-  exist specifically for this consumer.
+  `serialize_world_init()` (grid/limits/`max_energy`/registered types,
+  once per connection), `serialize_tick()` (full state every tick —
+  flies, items, tiles, mobs, corpses, per-owner `energy`, death/birth/
+  extinction events). Built from the real object graph, never a fly's
+  own `Percept`/`Observation` — a human player isn't bound by the
+  anonymity contract (`decisions.md` #22), and `Item`/`Tile`/`Mob`/
+  `Corpse`'s `id`/`type_name` (`decisions.md` #43) exist specifically
+  for this consumer. `energy` was added in `decisions.md` #45, after
+  building the frontend's energy meter surfaced that it had never made
+  it into the contract at all.
 - **`app.py`** — `AppState` (one shared `Colony`/`WorldController`/
   action registry per server process, plus the set of connected
   sockets); `create_app(state=None)` builds a `FastAPI` app with a
@@ -342,6 +345,38 @@ it back, kept as its own top-level package for that reason, the same as
   `AppState` instead, the same discipline `fly_brain`'s own test fixtures
   already use. `python -m server.app` runs it directly; `uvicorn
   server.app:app` is the standard alternative.
+
+## `frontend/` — the Next.js + Phaser client
+
+`decisions.md` #45. A separate npm project (Next.js 16, App Router,
+TypeScript, Tailwind, Phaser 3), not part of the Python package tree —
+talks to `server/app.py` over WebSocket only, no other coupling.
+
+- **`src/lib/protocol.ts`** — TypeScript types mirroring
+  `server/serialize.py`'s wire format field-for-field, kept in sync by
+  hand (no shared schema source yet).
+- **`src/lib/useGameSocket.ts`** — owns the one WebSocket connection,
+  parses every message type, exposes plain React state (`worldInit`,
+  `tick`, `owner`, a request/event `log`) and two actions (`join`,
+  `sendRequest`). Everything downstream of this hook has no idea a wire
+  format exists.
+- **`src/components/GameCanvas.tsx`** — the Phaser grid. Redraws full
+  state from scratch every tick, deliberately no incremental diffing —
+  matches the wire contract's own "full state, not a diff" choice
+  (`decisions.md` #44). Flies are circles colored by owner (a white
+  ring marks "you"); items/tiles/mobs/corpses are colored squares.
+  Hover detection is plain pointer-position math against the latest
+  tick's fly list, not a Phaser input object per fly — a "simple
+  colored shapes" v1, not sprite art (a deliberate scope decision, see
+  `decisions.md` #45, not a stand-in for missing assets).
+- **`src/components/Hud.tsx`/`RequestLog.tsx`/`RequestInput.tsx`/
+  `JoinScreen.tsx`** — tick/population counters and your energy meter;
+  a scrolling log of your requests plus deaths/births as they happen;
+  the free-text instruction box (`player_request`); the name-entry
+  screen (`join`).
+- **`src/app/page.tsx`** — wires all of the above together: connecting
+  state until `world_init` arrives, the join screen until you have an
+  `owner`, then the game view.
 
 ## Data flow through one tick (per fly)
 

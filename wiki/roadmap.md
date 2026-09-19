@@ -38,7 +38,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37), hunger-loss punishment (#38), sensing radius (#39), and evolved wander (#40) are all fixed now — every piece the design called for is in place; a real, longer colony-scale foraging run hasn't been done yet to confirm it all adds up in practice |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
-| Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **backend done and tested** (`decisions.md` #44) — new `server/` package (`serialize.py`, `app.py`) wraps `game/live_run.py`'s exact loop behind a WebSocket, one shared `Colony` broadcast to every connection; verified live against the real connectome/checkpoint with a real `websockets` client, not just the test harness. Only the Next.js/Phaser frontend itself remains, not started |
+| Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **first iteration done** (`decisions.md` #44, #45) — backend `server/` package wraps `game/live_run.py`'s loop behind a WebSocket; `frontend/` (Next.js, TypeScript, Phaser 3) is a real client: join flow, tick-driven grid rendering (simple colored shapes, not sprite art yet), request input, HUD (tick/population/energy), request/event log, per-fly hover tooltip. Verified live end to end with Playwright against the real backend, not just built/typechecked. Not done: real sprite art, a multi-owner switcher in one client, incremental tick diffing, a shared TS/Python schema source |
 
 ## Immediate next steps, in order
 
@@ -337,6 +337,30 @@ yet started (see "After that" below).
   test harness. Still not started: the Next.js/Phaser frontend itself --
   `server/` only proves the backend half of the contract, nothing has
   rendered a pixel yet.
+- ~~Frontend, first iteration~~ done, see `decisions.md` #45. New
+  `frontend/` package (Next.js 16, TypeScript, Phaser 3): join screen,
+  a Phaser grid redrawing full state every tick (simple colored
+  shapes -- circles for flies colored by owner, squares for items/
+  tiles/mobs/corpses colored by kind -- not sprite art yet, a
+  deliberate scope call, not a placeholder-by-accident), a hover
+  tooltip reading a fly's live hunger/health/owner, an HUD (tick,
+  population, your energy meter), a request/event log, and a request
+  input box wired straight to `player_request`. Building the energy
+  meter surfaced a real gap: `Environment.energy` was never part of the
+  wire contract at all -- added to both `world_init`
+  (`max_energy`) and every `tick` (`energy: dict[str, float]`) in
+  `server/serialize.py`, with tests, before the meter itself existed.
+  Verified live with Playwright driving both the real backend and the
+  real dev server together, not just a clean build/typecheck --
+  screenshotted the join flow, live tick rendering with real movement
+  and hunger-bar drain, a real request applying and logging, a real
+  death appearing in the log the same tick population dropped, and the
+  hover tooltip. Scope deliberately narrow for v1: one interactive
+  owner per client plus spectating everyone else, not a multi-owner
+  switcher (real scope for two people testing together, not for
+  building alone); no incremental tick diffing; no shared TS/Python
+  schema source, `frontend/src/lib/protocol.ts` mirrors the wire
+  format by hand.
 - **Structure/effect split for items, threats, and tiles** — separating
   *what moves/is consumed/occupies an area* (structure, discrete,
   tool-selected) from *what it does to a fly* (effect, continuous,
