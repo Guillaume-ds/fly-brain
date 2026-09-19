@@ -94,9 +94,9 @@ into its embedded string, worded from the Result registry's own
 vocabulary, so a mimic with a harmless-sounding name still registers
 some danger to the frozen reflex — whether that clause survives being
 swamped by the name on a *real* encoder is still unverified
-(`python -m world.measure_encoder --encoder nomic` needs a machine that
-can reach huggingface.co; everything above runs on the orthographic
-stub today).
+(`python -m fly_brain.measure_encoder --encoder nomic` needs a machine
+that can reach huggingface.co; everything above runs on the
+orthographic stub today).
 
 Creation also costs something now: `Environment.energy`, one pool per
 owner, that `creation_cost(kind, strength)` draws down and a fixed
@@ -245,7 +245,7 @@ irregular terrain.
   described mob from another, and does a misleadingly gentle name blunt
   the frozen escape reflex's response to something actually lethal
   (`create_mob`'s mandatory clause, `decisions.md` #30, #31). That's
-  unverified against the real encoder — `world/measure_encoder.py`
+  unverified against the real encoder — `fly_brain/measure_encoder.py`
   needs a machine that can reach huggingface.co
 - next: decide whether true irregular terrain is worth building at all
   before the frontend exists to make placing it comprehensible — open

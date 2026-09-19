@@ -4,3 +4,4 @@ __pycache__/
 data/*.feather
 data/*.part
 training/checkpoints/
+output/*.png

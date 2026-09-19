@@ -3286,3 +3286,55 @@ sent exactly once, right after `world_init`; `watch` gets an immediate
 match topology's neuron counts; a watched fly's death sends one `null`
 `neuron_state` message. 171 Python tests passing total; frontend passes
 `next lint`, `tsc --noEmit`, and `next build` clean.
+
+## 48. Two small housekeeping fixes: a layering violation, an untracked-output inconsistency
+
+**Context:** asked to review whether the top-level package split
+(`world`/`fly_brain`/`director`/`training`/`game`/`server`/`frontend`)
+is justified, and whether `output`/`data` fit the same picture. Found
+the split itself well-justified (it's the documented Agent/Environment/
+Game/Trainer pattern from `wiki/architecture.md`, each boundary tied to
+a real reason, not just aesthetics) but turned up two concrete, small
+problems along the way.
+
+**1. `world/` was importing from `fly_brain/`, breaking the one
+invariant `wiki/architecture.md` calls load-bearing** ("`world/` never
+imports from `fly_brain/`" — the whole point being that the environment
+must work with no concept of a brain at all).
+`world/measure_encoder.py` did exactly that
+(`from fly_brain.agent import DANGER_DESCRIPTION`). Not a real import
+cycle — nothing else imported this diagnostic script — but a silent
+violation of a rule the docs state as absolute. Fixed by moving the
+file to `fly_brain/measure_encoder.py` (`git mv`, preserving history):
+it already needed both `fly_brain`'s `DANGER_DESCRIPTION` and
+`world`'s `ItemEncoder`/Result registry, and `fly_brain -> world` is
+the direction the architecture already allows everywhere else
+(`fly_brain/agent.py`, `fly_brain/plasticity.py` both do the same).
+Run command is now `python -m fly_brain.measure_encoder`, updated
+everywhere it's referenced (`wiki/world.md`, `wiki/roadmap.md`; this
+file's own #24 entry is left untouched, append-only, describing what
+was true when it was written).
+
+**2. `output/*.png` was tracked in git while `data/*.feather` and
+`training/checkpoints/` — the same category of thing, regenerable
+output written by a script (`analyze.py`/`simulate.py`,
+`OUTPUT_DIR.mkdir(..., exist_ok=True)` then `fig.savefig(...)`) — were
+already gitignored.** Inconsistent treatment of the same kind of
+artifact, not a deliberate choice (confirmed: `README.md` only points
+at `output/*.png` as something a reader can regenerate themselves,
+never embeds them). Added `output/*.png` to `.gitignore` and
+`git rm --cached`'d the four already-tracked PNGs — they stay on disk,
+just stop being part of the repo's history going forward.
+
+**Verified:** `import fly_brain.measure_encoder` succeeds; a fresh
+`grep` for `^from fly_brain\.` under `world/` is empty (the invariant
+now holds with zero exceptions, not just fewer); the four PNGs remain
+on disk under `output/` and `git status` reports them as ignored, not
+untracked. Full test suite re-run after the move.
+
+Tests: no new tests — both fixes are structural (a file's package
+membership, git tracking metadata), not behavior, and the existing
+171-test suite already covers everything that could have broken (it
+doesn't reference `measure_encoder` at all, confirming it was already
+correctly excluded from the tested surface as a standalone diagnostic
+script). 171 Python tests passing, unchanged.

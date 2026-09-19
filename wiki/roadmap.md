@@ -208,7 +208,7 @@ Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
 dedicated audit CLI/visualization on top of the hooks already in place;
 a live test of `create_mob`'s mandatory clause against
-the real encoder (`world/measure_encoder.py --encoder nomic`, needs a
+the real encoder (`fly_brain/measure_encoder.py --encoder nomic`, needs a
 machine that can reach huggingface.co); and the follow-on ideas raised
 alongside this work but deliberately not folded in — multi-colony
 ownership per player, a resource-cost system for creation actions, and

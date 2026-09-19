@@ -53,8 +53,8 @@ difference for yourself. huggingface.co is not reachable from every
 environment this project runs in (wiki/decisions.md #24), which is
 exactly why this is a script you run locally rather than a test.
 
-    python -m world.measure_encoder --encoder nomic
-    python -m world.measure_encoder --encoder hashing   # for contrast
+    python -m fly_brain.measure_encoder --encoder nomic
+    python -m fly_brain.measure_encoder --encoder hashing   # for contrast
 """
 
 from __future__ import annotations
@@ -64,9 +64,10 @@ import itertools
 
 import numpy as np
 
-from fly_brain.agent import DANGER_DESCRIPTION
 from world.items import HashingItemEncoder, ItemEncoder, NomicItemEncoder
 from world.results import build_default_results
+
+from .agent import DANGER_DESCRIPTION
 
 # The mob vocabulary a create_mob signature would plausibly expose. Kept
 # deliberately small: the point of a fixed enum is that a request for
