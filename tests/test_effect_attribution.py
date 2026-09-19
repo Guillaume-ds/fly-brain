@@ -10,11 +10,17 @@ mechanism behind decisions.md #28's "starvation produces no learning
 signal at all" finding (decay swallows weak effects, not just itself).
 
 What's pinned here: `ColonyStepResult.effects` carries ONLY effect
-deltas -- item/tile pickup, mob contact, fly combat, kill-transfer --
+deltas -- item/tile pickup, mob contact, fly combat, corpse pickup --
 never the decay, and `Colony.step()` reinforces on that, not a net-state
 diff. Not addressed here, and deliberately not conflated with it: #28's
 separate, still-open question of whether hunger *loss* itself (decay or
 a `starve`-effect mob) should carry its own punishment signal.
+
+(The kill-effect test below predates decisions.md #41 -- corpses --
+which replaced the old direct fly-to-fly kill-transfer this test
+originally covered; kept and renamed since it still pins the same
+underlying claim, that a kill produces a real, same-tick HUNGER effect
+for a nearby survivor, just via a different mechanism now.)
 """
 
 from __future__ import annotations
@@ -164,7 +170,7 @@ def test_fly_combat_effect_is_tracked(env):
     assert result.effects[rival.id][Channel.HEALTH] < 0
 
 
-def test_kill_transfer_effect_is_tracked(env):
+def test_a_kill_produces_a_same_tick_corpse_pickup_effect(env):
     env.spawn_colony("rival", 1)
     mine = env.flies[0]
     rival = next(f for f in env.flies if f.owner == "rival")
@@ -176,6 +182,7 @@ def test_kill_transfer_effect_is_tracked(env):
 
     # mine died this tick -- its own effects entry (from taking combat
     # damage) is still exposed even though it's no longer in env.flies.
+    # rival, staying put, eats mine's corpse the same tick (decisions.md #41).
     assert mine.id not in [f.id for f in env.flies]
     assert result.effects[rival.id][Channel.HUNGER] > 0
 

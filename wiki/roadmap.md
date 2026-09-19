@@ -21,7 +21,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Player-driven *tile* creation — `Tile`, `create_tile` director action | **done, tested** (`decisions.md` #31, #32) — reuses the item mechanism, never consumed, a fraction re-applied every tick |
 | Player-driven *mob* creation — `Threat` renamed `Mob`, `create_mob` director action | **done, tested** (`decisions.md` #30–#32) — authored `effect`/`strength`, never derived from the embedding; the built-in spider is unaffected (still unconditional insta-kill) |
 | Resource-cost system — `Environment.energy`, gates all three creation actions | **done, tested** (`decisions.md` #33) — cost = `(kind, strength)` only, fixed per-tick regen, existing type caps kept as a backstop; constants are placeholders pending real playtesting |
-| Multi-colony ownership — `Fly.owner`, per-owner extinction, fly-vs-fly perception/combat/kill-transfer, `target` on creation | **done, tested** (`decisions.md` #34, #35) — every fly perceives every other fly through a fixed, exactly orthogonal per-owner vector; the `Percept` itself and the anonymity contract are unchanged; combat/kill-transfer reuse existing mechanisms (authored `HEALTH` delta, the existing `reward = max(0, ΔHUNGER)` term) with zero `fly_brain/` changes |
+| Multi-colony ownership — `Fly.owner`, per-owner extinction, fly-vs-fly perception/combat, `target` on creation | **done, tested** (`decisions.md` #34, #35) — every fly perceives every other fly through a fixed, exactly orthogonal per-owner vector; the `Percept` itself and the anonymity contract are unchanged; combat reuses existing mechanisms (authored `HEALTH` delta) with zero `fly_brain/` changes. The original kill-transfer reward from this entry is superseded — see corpses, `decisions.md` #41 |
 | `fly_brain/circuit.py` — trainable LIF circuit over real connectome | done, tested |
 | `fly_brain/agent.py` — `EscapeAgent` wiring circuit into the world | done, integration-tested (untrained weights) |
 | `training/curriculum.py` — stage configs | done (stages 1, 2; chains by default from the prior stage's checkpoint, `decisions.md` #36) |
@@ -170,9 +170,12 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     untouched. `resolve_fly_combat()` deals a small fixed, symmetric,
     authored `HEALTH` delta between different-owner flies on contact
     (same-owner contact does nothing); `resolve_kill_transfers()`
-    moves a fraction of a dying fly's own hunger to the rival(s) on its
+    moved a fraction of a dying fly's own hunger to the rival(s) on its
     cell, same tick, flowing through the existing `reward = max(0,
     ΔHUNGER)` term untouched — no `fly_brain/` changes at all.
+    (`resolve_kill_transfers()` itself is gone as of `decisions.md` #41 —
+    replaced with corpses, after a real order-dependence bug was found in
+    it; see #41 for the fix and why.)
     `create_item`/`create_tile`/`create_mob` gained an optional
     `target` field (`"own"` or a named rival; omitted, spawning is
     unchanged from before this entry) via a new `required_arguments`
@@ -191,7 +194,7 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     single-player headless colony run confirmed byte-for-byte
     unaffected. Still open, deliberately: home-region geometry, whether
     `max_population` stays shared or goes per-player, the combat damage
-    constant, and the kill-transfer fraction (real risk to tune around:
+    constant, and the corpse hunger fraction (real risk to tune around:
     could make combat more lucrative than foraging, on top of the
     still-open exploration-bootstrapping gap, `decisions.md` #38) — all
     placeholders, not tuned by playing yet.
@@ -221,7 +224,7 @@ yet started (see "After that" below).
   hunger decay — a weak but genuine +0.4 hunger pickup, against -1
   decay, read as -0.6 and produced **zero** reward, not just "decay
   itself goes unpunished." `ColonyStepResult.effects` now isolates
-  item/tile/mob/fly-combat/kill-transfer deltas from decay entirely,
+  item/tile/mob/fly-combat/corpse-pickup deltas from decay entirely,
   and `Colony` reinforces on that. Verified live, same scenario as
   #36's: real improvement (survived to tick 449 vs 426, kept
   reproducing after starvation deaths began) but not a full fix — the
@@ -265,6 +268,23 @@ yet started (see "After that" below).
   169 vs. 122; real learning, `gain_drift` 0.585 vs. 0.0, 0.871 vs.
   0.249) — the two ties reported honestly as a sparse-world luck limit,
   not cherry-picked away.
+- ~~Corpses, replacing the fly-to-fly kill-transfer~~ done, see
+  `decisions.md` #41. Found while starting to playtest combat/energy
+  constants: `resolve_kill_transfers()` had a real order-dependence bug
+  — a mutual kill (the normal outcome of symmetric 1v1 combat between
+  equal-health flies, not an edge case) mutated a dying fly's hunger
+  mid-loop, so whichever fly was processed second got a transfer
+  computed from an already-inflated value (verified live: 60/60
+  pre-death hunger produced a 45/30 split, 75 total — value created
+  from nothing). Replaced with `Corpse`: any fly death (combat,
+  starvation, or a mob, not just a kill) leaves a corpse worth a
+  fraction of what it had left, eaten by any fly (any owner) the same
+  way an item is. Fixes the bug at the root — no more fly-to-fly
+  mutation — and generalizes "death has ecological consequence" beyond
+  combat. Verified live: a mutual 1v1 kill now produces two symmetric
+  corpses (30/30, not 45/30) and no immediate reward to either
+  combatant; a real 2v1 gang-up correctly rewards a surviving attacker
+  same-tick (`HUNGER +20`).
 - **What's still open** — decay itself remains deliberately unpunished
   (a colony that quietly starves without ever touching a `starve` mob
   still gets no punishment signal from that decline). Exploration-

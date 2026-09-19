@@ -2618,3 +2618,122 @@ persistence inherits from the parent with mutation (`wander_mutation_
 sigma=0.0` made deterministic for the assertion); a `WanderAgent` entry
 is removed on death, mirroring escape/plasticity. 112 tests passing
 total.
+
+## 41. Corpses replace the fly-to-fly kill-transfer
+
+**Context:** asked to tune combat/energy constants by playtesting
+(headless scenario sweeps, target: combat and foraging comparable, no
+strong opinion on energy pacing beyond that). Before touching any
+constant, checked the mechanics the sweep would actually be measuring —
+and found a real bug, not just an untuned number.
+
+**The bug, found live, not assumed:** `resolve_kill_transfers()`
+iterated `self.flies` and applied each dying fly's transfer immediately,
+mutating the *recipient's* hunger mid-loop. In a mutual kill — both
+flies reaching 0 health the same tick, which is the *normal* outcome of
+symmetric `FLY_COMBAT_DAMAGE` between two equal-health flies, not an
+edge case — whichever fly was processed second computed its own
+transfer from an already-inflated hunger value (having just received
+the first fly's transfer). Verified directly: two flies with 60/60
+hunger at death produced a 45/30 split, not the expected symmetric
+30/30 — 75 total transferred, more than either fly's actual hunger.
+Order-dependent, and value-creating, not just asymmetric.
+
+**Two fixes were on the table.** (A) minimal: only transfer to a
+recipient that survives the tick — a dying fly is never a valid
+recipient, so a mutual kill simply produces no transfer at all, and the
+bug's root cause (mutating one dying fly's hunger while computing
+another's) never triggers. (B, chosen): remove the fly-to-fly transfer
+mechanism entirely — a dying fly (any cause, not just a kill) leaves a
+`Corpse` at its death position, worth `hunger × CORPSE_HUNGER_FRACTION`
+(renamed from `KILL_TRANSFER_FRACTION`, same value, `0.5`); any fly, any
+owner, can eat it, exactly like an item (sensed via `WORLD_SENSING_
+RADIUS`, decisions.md #39; consumed within a small `corpse_radius`;
+removed on pickup; capped at `max_corpses`).
+
+**Why (B) over the smaller fix:** it removes the order-dependence at
+its structural root (no fly ever mutates another fly's state anymore —
+corpses are independent entities, not a value passed hand-to-hand), and
+it generalizes "death has consequence for the world" beyond combat,
+consistent with how this project already prefers grounding rewards in
+real world state over bespoke transfers (the same reasoning #35 used
+choosing same-tick kill-transfer over an injected bonus in the first
+place). The risk this reopens — an indirect, multi-tick "kill now,
+reward later" chain, the exact shape #35 found unworkable against
+`KC_TRACE_DECAY=0.7`'s short horizon — doesn't actually apply here:
+a corpse spawns exactly where the death happened, so the winner (who was
+necessarily on that same cell to be fighting there) is typically
+already standing on it, and `resolve_corpse_pickup()` runs the same tick
+as `resolve_deaths()`, so the reward usually lands zero or one tick
+later, nowhere near the ~8-tick horizon #35 found unbridgeable.
+
+**Two open questions, decided directly rather than left implicit:**
+edible by any owner, not just rivals (a starved colony-mate's corpse can
+feed its own colony — simpler, and there's no reason to special-case
+it); every death spawns one, not just combat kills (one uniform rule,
+thematically consistent — decay isn't the only way to leave something
+behind).
+
+**`Corpse` (`world/entities.py`):** structurally an `Item` in every way
+that matters — same anonymous-Percept perception, same single-use-then-
+removed lifecycle — except `hunger_value` is authored per instance from
+the dying fly's own hunger, never derived from `attributes` via
+`blend_deltas()`. There's no description to derive it from, and the
+whole point is that it's exactly what that fly had left, not an
+encoder's guess. `attributes` (a fixed "the corpse of a dead fly"
+description, encoded once, jittered per instance like everything else)
+exists purely so a corpse is perceivable — it carries no relationship to
+`hunger_value`, same separation of concerns as a `Mob`'s authored effect
+vs. its attributes (decisions.md #30).
+
+**Mechanically:** `resolve_deaths()` now spawns a corpse for every dying
+fly before removing it from `self.flies` (reading its hunger first —
+that's what the corpse is worth), respecting `max_corpses`.
+`resolve_corpse_pickup()` (new, mirrors `resolve_item_pickup()`'s exact
+shape: `distance <= radius`, one pickup per fly per tick, removed after)
+runs right after `resolve_deaths()` in `step()`'s order — the same-tick
+placement that keeps the reward close to the fight. `resolve_kill_
+transfers()` is deleted outright, not deprecated.
+
+**A stale doc caught along the way, unrelated to this bug but adjacent:**
+`Item`'s own docstring still claimed `radius` was "both how far away a
+fly can perceive it and how close a fly must be to pick it up" — true
+before #39, false since (`WORLD_SENSING_RADIUS` now governs perception
+uniformly; `radius` is interaction-only). Corrected while writing
+`Corpse`'s docstring right next to it.
+
+**Verified live, both the bug and the fix:**
+1. Before: two full-health flies fighting to a standstill (confirmed
+   this really happens under default constants — symmetric damage means
+   equal-health 1v1 combat is mutually assured destruction, not an
+   unusual case) produced the 45/30 split described above.
+2. After: the same scenario produces two corpses, `30.0`/`30.0` exactly
+   (`60 × 0.5` each) — symmetric, and summing to exactly `120 × 0.5`, not
+   more. Neither combatant gets an immediate reward, since neither
+   survives to eat either corpse.
+3. A real 2v1 gang-up (two same-owner attackers vs. one rival, the
+   asymmetric case combat is actually supposed to reward) correctly
+   produces a same-tick `HUNGER +20` for one surviving attacker once the
+   rival dies — confirming the mechanism still delivers when combat
+   should pay off, not just correctly withholding when it shouldn't.
+
+**Not yet done:** the actual playtesting task this was found in service
+of — sweeping `FLY_COMBAT_DAMAGE`/`CORPSE_HUNGER_FRACTION`/energy
+constants for the target balance (combat and foraging comparable) — is
+still ahead of this entry, now on a mechanism that's actually correct to
+tune.
+
+Tests: `tests/test_corpses.py` (new, 12 tests) — death leaves a corpse
+worth exactly `hunger × CORPSE_HUNGER_FRACTION`; a starved fly's corpse
+is worth ~nothing; every death cause spawns one, not just combat; any
+owner can eat any corpse, including a fly's own colony; single-use,
+distance-gated, one-per-tick; `max_corpses` respected; perceived like
+any other entity; the order-dependence regression (symmetric 30/30, not
+45/30, and no value created from nothing) and a live confirmation that
+mutual 1v1 combat really does end in a double death under default
+constants. `tests/test_multi_colony.py`'s four kill-transfer tests
+removed (the mechanism they covered no longer exists);
+`tests/test_effect_attribution.py`'s kill-effect test renamed and kept,
+since it still pins the same underlying claim — a kill produces a real
+same-tick `HUNGER` effect for a nearby survivor — through the new
+mechanism. 120 tests passing total.

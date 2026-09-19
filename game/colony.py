@@ -121,7 +121,7 @@ class Colony:
             if fly.id not in self.plasticity_agents:
                 continue  # born this tick -- its agents are built in the births loop below
             # result.effects (decisions.md #37) is EFFECT deltas only --
-            # items/tiles/mobs/fly-combat/kill-transfer -- never the
+            # items/tiles/mobs/fly-combat/corpse-pickup -- never the
             # constant hunger decay, and never a before/after diff of net
             # state. A fly untouched by anything this tick simply has no
             # entry; reinforce()'s own early-return handles that the same

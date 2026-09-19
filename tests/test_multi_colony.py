@@ -11,9 +11,10 @@ creation-cost tests:
     pathway (the item contract's own invariant, extended here)
   - combat: authored, symmetric HEALTH damage between different-owner
     flies on contact; same-owner contact does nothing
-  - the kill-transfer reward: a dying fly's hunger moves to the rival(s)
-    on its cell, same tick
   - target-based spawn placement for create_item/create_tile/create_mob
+
+The old fly-to-fly kill-transfer reward is gone as of decisions.md #41 --
+superseded by corpses (`tests/test_corpses.py` covers that mechanism now).
 """
 
 from __future__ import annotations
@@ -209,63 +210,6 @@ def test_flies_far_apart_do_not_fight(env):
 
     assert mine.health == 60
     assert rival.health == 60
-
-
-# --- kill-transfer reward -------------------------------------------------
-
-def test_a_dying_fly_transfers_hunger_to_the_rival_on_its_cell(env):
-    env.spawn_colony("rival", 1)
-    mine = env.flies[0]
-    rival = next(f for f in env.flies if f.owner == "rival")
-    mine.position = rival.position = Position(5, 5)
-    mine.health = 0  # already dying this tick
-    mine.hunger = 80
-    rival.hunger = 20
-
-    env.resolve_kill_transfers()
-
-    assert rival.hunger > 20
-    assert mine.hunger == 80  # the dying fly's own hunger is read, not spent from
-
-
-def test_kill_transfer_splits_evenly_across_multiple_rivals(env):
-    env.spawn_colony("rival_a", 1)
-    env.spawn_colony("rival_b", 1)
-    mine = env.flies[0]
-    rival_a = next(f for f in env.flies if f.owner == "rival_a")
-    rival_b = next(f for f in env.flies if f.owner == "rival_b")
-    mine.position = rival_a.position = rival_b.position = Position(5, 5)
-    mine.health = 0
-    mine.hunger = 80
-    rival_a.hunger = rival_b.hunger = 10
-
-    env.resolve_kill_transfers()
-
-    assert rival_a.hunger == rival_b.hunger
-    assert rival_a.hunger > 10
-
-
-def test_a_fly_that_isnt_dying_transfers_nothing(env):
-    env.spawn_colony("rival", 1)
-    mine = env.flies[0]
-    rival = next(f for f in env.flies if f.owner == "rival")
-    mine.position = rival.position = Position(5, 5)
-    mine.health = 50  # not dying
-    rival.hunger = 20
-
-    env.resolve_kill_transfers()
-
-    assert rival.hunger == 20
-
-
-def test_no_transfer_without_a_rival_on_the_same_cell(env):
-    mine = env.flies[0]
-    mine.health = 0
-    mine.hunger = 80
-
-    env.resolve_kill_transfers()  # should not raise, nothing to do
-
-    assert mine.hunger == 80
 
 
 # --- target-based spawn placement ------------------------------------

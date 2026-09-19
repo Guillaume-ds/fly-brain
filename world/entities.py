@@ -31,8 +31,10 @@ class Item:
     `strength` (decisions.md #32) -- `strength` sets overall magnitude
     only, never which channel moves or in which direction.
 
-    `radius` is both how far away a fly can perceive it and how close a
-    fly must be to pick it up -- one distance, one name.
+    `radius` is the interaction distance only -- how close a fly must be
+    to pick it up. Since decisions.md #39, sensing distance is a separate,
+    much larger, shared constant (`Environment.WORLD_SENSING_RADIUS`);
+    `radius` no longer governs perception at all.
     """
 
     position: Position
@@ -88,6 +90,27 @@ class Mob:
     attributes: np.ndarray
     effect: Effect | None = None
     strength: int | None = None
+
+
+@dataclass
+class Corpse:
+    """What's left where a fly died -- from any cause (combat, starvation,
+    a mob), not just a kill (decisions.md #41). Structurally an item in
+    every way that matters: perceived the same anonymous way, eaten once
+    by whichever fly (any owner) reaches it first, then gone. The one
+    difference from a real `Item`: `hunger_value` is authored per
+    instance from the dead fly's own remaining hunger at death, never
+    derived from `attributes` via the Result registry -- there's no
+    description to derive it from, and the whole point is that it's
+    exactly what that fly had left, not an encoder's guess at it.
+    `attributes` exists purely so a corpse is perceivable like anything
+    else; it carries no relationship to `hunger_value`.
+    """
+
+    position: Position
+    radius: float
+    attributes: np.ndarray
+    hunger_value: float
 
 
 @dataclass

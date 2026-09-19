@@ -20,7 +20,10 @@ in never being consumed on contact (decisions.md #31). `Mob` is the
 deliberate exception -- perceived like an item, but it moves and its
 effect is authored (`effect`/`strength`), never derived from the Result
 registry, and the built-in spider still kills unconditionally through
-`determine_fly_death()`; see `entities.Mob` for why.
+`determine_fly_death()`; see `entities.Mob` for why. `Corpse` (decisions.md
+#41) is what any fly's death (any cause) leaves behind -- perceived the
+same anonymous way, eaten once like an item, its food value authored
+from the dead fly's own hunger rather than derived from anything.
 
 A fly's observation is an anonymous list of Percepts (attribute vector +
 relative position, no name/type/id) rather than named per-type fields --
@@ -37,7 +40,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .entities import Fly, Item, Mob, Position, Tile
+from .entities import Corpse, Fly, Item, Mob, Position, Tile
 from .items import HashingItemEncoder, ItemEncoder, ItemType, MobType, jitter
 from .results import (
     MID_STRENGTH,
@@ -93,7 +96,7 @@ FLY_PERCEPTION_RADIUS = 3.0  # how far a fly can perceive another fly, own or ri
 # the interaction radii are. Placeholder, not tuned by playing yet.
 WORLD_SENSING_RADIUS = 8.0
 FLY_COMBAT_DAMAGE = 5  # fixed, symmetric, authored HEALTH delta per tick of contact between different-owner flies -- placeholder, not tuned
-KILL_TRANSFER_FRACTION = 0.5  # fraction of a dying fly's own hunger transferred to the rival(s) that killed it -- placeholder, not tuned
+CORPSE_HUNGER_FRACTION = 0.5  # fraction of a fly's own hunger at death that becomes its corpse's food value -- placeholder, not tuned
 TARGET_SPAWN_RADIUS = 5  # how tightly "near an owner's home region" is defined when creation targets a territory -- placeholder, not tuned
 _CORNER_OFFSETS = [(0, 0), (1, 0), (0, 1), (1, 1)]  # home-region geometry: grid corners in registration order -- explicitly a placeholder, not a considered design (decisions.md #34)
 
@@ -149,7 +152,7 @@ class ColonyStepResult:
     births: dict[int, int]  # new fly id -> parent fly id
     colony_extinct: dict[str, bool]  # owner -> whether THEIR flies are all gone (decisions.md #34) -- the game ends for a player when theirs is True, not globally
     timed_out: bool
-    effects: dict[int, dict[Channel, float]]  # fly id -> channel -> total EFFECT delta this tick (decisions.md #37) -- items/tiles/mobs/fly-combat/kill-transfer, NEVER the constant hunger decay. This, not a before/after state diff, is what Colony.step() reinforces on.
+    effects: dict[int, dict[Channel, float]]  # fly id -> channel -> total EFFECT delta this tick (decisions.md #37) -- items/tiles/mobs/fly-combat/corpse-pickup, NEVER the constant hunger decay. This, not a before/after state diff, is what Colony.step() reinforces on.
 
 
 class Environment:
@@ -186,6 +189,9 @@ class Environment:
         tile_radius: float = 2.5,
         tile_spawn_rate: float = 0.01,
         max_tiles: int = 8,
+        corpse_radius: float = 2.0,
+        corpse_description: str = "the corpse of a dead fly",
+        max_corpses: int = 15,
         starting_energy: float = STARTING_ENERGY,
         max_energy: float = MAX_ENERGY,
         energy_regen_per_tick: float = ENERGY_REGEN_PER_TICK,
@@ -216,6 +222,8 @@ class Environment:
         self.tile_radius = tile_radius
         self.tile_spawn_rate = tile_spawn_rate
         self.max_tiles = max_tiles
+        self.corpse_radius = corpse_radius
+        self.max_corpses = max_corpses
         self.starting_energy = starting_energy
         self.max_energy = max_energy
         self.energy_regen_per_tick = energy_regen_per_tick
@@ -258,6 +266,11 @@ class Environment:
             radius=self.mob_radius,
         )
         self.mob_types: list[MobType] = []  # player-created, see add_mob_type()
+        # A corpse's attributes are for perception only, same reasoning as
+        # a Mob's (decisions.md #30) -- its actual food value never comes
+        # from this vector, only from the dead fly's own hunger (decisions.md
+        # #41), so there's no description-vs-effect trust question here at all.
+        self.corpse_attributes = self.encoder.encode(corpse_description)
         self.rng = np.random.default_rng(seed)
 
         # Owner registry (decisions.md #34, #35): persists across reset(),
@@ -500,6 +513,7 @@ class Environment:
         self.mobs = []
         self.items = []
         self.tiles = []
+        self.corpses = []
         self.flies = []
         self._tick_effects: dict[int, dict[Channel, float]] = {}  # decisions.md #37
         self.register_owner(DEFAULT_OWNER)
@@ -533,9 +547,9 @@ class Environment:
         self.resolve_tile_effects()
         self.resolve_mob_contact()
         self.resolve_fly_combat()
-        self.resolve_kill_transfers()
         births = self.resolve_reproduction()
         deaths = self.resolve_deaths()
+        self.resolve_corpse_pickup()
 
         return ColonyStepResult(
             observations={fly.id: self.observe(fly) for fly in self.flies},
@@ -700,36 +714,24 @@ class Environment:
                     self._apply_channel_delta(fly, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
                     self._apply_channel_delta(other, Channel.HEALTH, -FLY_COMBAT_DAMAGE, self.channel_limits[Channel.HEALTH])
 
-    def resolve_kill_transfers(self) -> None:
-        """When a fly is about to die (health <= 0, whatever the cause)
-        with rival-owned flies sharing its cell, a fraction of its own
-        hunger transfers to them, split evenly -- a real hunger delta,
-        the same tick as the death, flowing through the existing reward
-        mechanism untouched (decisions.md #35): `reward = max(0,
-        delta_hunger)` in fly_brain/plasticity.py needs no change at
-        all. This delta is now tracked as an EFFECT (decisions.md #37),
-        so it reaches reinforce() cleanly rather than possibly being
-        diluted below zero by that same tick's hunger decay, the way a
-        net-state-diff approach would risk. Must run after
-        resolve_fly_combat() (so combat's damage is already reflected)
-        and before resolve_deaths() (so the dying fly's hunger/position
-        are still here to read).
+    def resolve_corpse_pickup(self) -> None:
+        """A corpse is eaten exactly like an item -- distance <=
+        `corpse_radius`, single-use, removed on pickup, owner-agnostic
+        (any fly, any owner, decisions.md #41). Runs right after
+        `resolve_deaths()`, so a corpse spawned this very tick (see
+        `resolve_deaths()`) can be eaten the same tick by whichever
+        survivor is already standing where the death happened -- typically
+        the winner of a fight, without needing a separate fly-to-fly
+        transfer mechanism at all.
         """
         for fly in self.flies:
-            if fly.health > 0:
-                continue
-            rivals_here = [
-                other
-                for other in self.flies
-                if other.owner != fly.owner
-                and other.position.x == fly.position.x
-                and other.position.y == fly.position.y
-            ]
-            if not rivals_here:
-                continue
-            transfer = fly.hunger * KILL_TRANSFER_FRACTION / len(rivals_here)
-            for rival in rivals_here:
-                self._apply_channel_delta(rival, Channel.HUNGER, transfer, self.channel_limits[Channel.HUNGER])
+            for corpse in self.corpses:
+                if fly.position.distance_to(corpse.position) <= corpse.radius:
+                    self._apply_channel_delta(
+                        fly, Channel.HUNGER, corpse.hunger_value, self.channel_limits[Channel.HUNGER]
+                    )
+                    self.corpses.remove(corpse)
+                    break
 
     def apply_result(self, fly: Fly, attributes: np.ndarray, strength: int, tick_fraction: float = 1.0) -> None:
         """The real mechanical effect of an item/tile on a fly -- a
@@ -752,7 +754,7 @@ class Environment:
     def _apply_channel_delta(self, fly: Fly, channel: Channel, delta: float, limit: int) -> None:
         """The one place a Channel delta actually gets written to a Fly
         -- shared by every effect source (item/tile pickup, mob contact,
-        fly combat, kill-transfer) so the clamping logic exists exactly
+        fly combat, corpse pickup) so the clamping logic exists exactly
         once, and so every effect is tracked in `self._tick_effects`
         (decisions.md #37) the same way, with nothing able to apply an
         effect without also recording it.
@@ -808,6 +810,12 @@ class Environment:
         return births
 
     def resolve_deaths(self) -> dict[int, str]:
+        """Every death -- combat, starvation, a mob, any cause -- leaves a
+        `Corpse` behind, not just a combat kill (decisions.md #41,
+        superseding #35's fly-to-fly kill-transfer). Read the fly's
+        hunger before it's dropped from `self.flies`: that's what the
+        corpse is worth.
+        """
         deaths: dict[int, str] = {}
         survivors = []
         for fly in self.flies:
@@ -816,8 +824,21 @@ class Environment:
                 survivors.append(fly)
             else:
                 deaths[fly.id] = cause
+                self._spawn_corpse(fly)
         self.flies = survivors
         return deaths
+
+    def _spawn_corpse(self, fly: Fly) -> None:
+        if len(self.corpses) >= self.max_corpses:
+            return
+        self.corpses.append(
+            Corpse(
+                position=fly.position,
+                radius=self.corpse_radius,
+                attributes=jitter(self.corpse_attributes, self.item_jitter_sigma, self.rng),
+                hunger_value=fly.hunger * CORPSE_HUNGER_FRACTION,
+            )
+        )
 
     def determine_fly_death(self, fly: Fly) -> str | None:
         # Only the built-in spider (effect=None) still kills unconditionally
@@ -851,22 +872,23 @@ class Environment:
         return Percept(attributes=attributes, dx=dx / norm, dy=dy / norm, distance=distance)
 
     def observe(self, fly: Fly) -> Observation:
-        """Items, tiles, and mobs are perceived identically -- each
-        carries its own attribute vector, and nothing that distinguishes
-        them survives into the Percept (decisions.md #22 part 1, #28,
-        #31). They're sensed through one shared `WORLD_SENSING_RADIUS`
-        (decisions.md #39), not their own individual `radius` -- that
-        stays reserved for actual interaction (resolve_item_pickup/
-        resolve_tile_effects/resolve_mob_contact), a deliberately
-        different, much smaller distance. Other flies are perceived the
-        same way (decisions.md #34, #35): every owner's flies share one
-        fixed, exactly orthogonal vector, so a colony can learn per-rival
-        valence -- but the Percept a fly receives is still exactly
-        attributes/dx/dy/distance, no owner field, ever.
+        """Items, tiles, mobs, and corpses are perceived identically --
+        each carries its own attribute vector, and nothing that
+        distinguishes them survives into the Percept (decisions.md #22
+        part 1, #28, #31, #41). They're sensed through one shared
+        `WORLD_SENSING_RADIUS` (decisions.md #39), not their own
+        individual `radius` -- that stays reserved for actual interaction
+        (resolve_item_pickup/resolve_tile_effects/resolve_mob_contact/
+        resolve_corpse_pickup), a deliberately different, much smaller
+        distance. Other flies are perceived the same way (decisions.md
+        #34, #35): every owner's flies share one fixed, exactly
+        orthogonal vector, so a colony can learn per-rival valence -- but
+        the Percept a fly receives is still exactly attributes/dx/dy/
+        distance, no owner field, ever.
         """
         nearby = [
             percept
-            for entity in (*self.items, *self.tiles, *self.mobs)
+            for entity in (*self.items, *self.tiles, *self.mobs, *self.corpses)
             if (percept := self.perceive(fly.position, entity.position, entity.attributes, WORLD_SENSING_RADIUS))
         ]
         nearby += [

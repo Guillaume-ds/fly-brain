@@ -256,7 +256,7 @@ class PlasticityAgent:
     def reinforce(self, deltas: dict[Channel, float]) -> None:
         """Call once per tick with the REAL effect deltas that tick
         produced -- `Environment`'s own accounting of what items/tiles/
-        mobs/fly-combat/kill-transfer actually did
+        mobs/fly-combat/corpse-pickup actually did
         (`ColonyStepResult.effects`, decisions.md #37), never a
         percept's similarity score directly, and never a before/after
         diff of a fly's net state (that would mix in the constant
