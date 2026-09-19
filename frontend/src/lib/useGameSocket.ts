@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { BrainSnapshot, ClientMessage, ServerMessage, TickData, WorldInitData } from "./protocol";
+import type {
+  BrainSnapshot,
+  BrainTopology,
+  ClientMessage,
+  NeuronState,
+  ServerMessage,
+  TickData,
+  WorldInitData,
+} from "./protocol";
 
 const DEFAULT_WS_URL = "ws://localhost:8000/ws";
 
@@ -34,6 +42,17 @@ export interface GameSocket {
    */
   brain: BrainSnapshot | null;
   watch: (flyId: number | null) => void;
+  /** Static connectome topology (wiki/decisions.md #47) -- arrives once
+   * per connection, right after world_init, and never changes: every
+   * fly of a kind shares the same subgraph.
+   */
+  brainTopology: BrainTopology | null;
+  /** Latest "neuron_state" message: live per-neuron voltage/spike
+   * arrays for the watched fly's two circuits, feeding the Tier 3
+   * neuron-graph view -- null under the same conditions as `brain`
+   * (not watching, or the watched fly died).
+   */
+  neuronState: NeuronState | null;
 }
 
 /** Owns the one WebSocket connection to server/app.py, parses every
@@ -48,6 +67,8 @@ export function useGameSocket(wsUrl: string = process.env.NEXT_PUBLIC_WS_URL ?? 
   const [log, setLog] = useState<LogEntry[]>([]);
   const [watchedFlyId, setWatchedFlyId] = useState<number | null>(null);
   const [brain, setBrain] = useState<BrainSnapshot | null>(null);
+  const [brainTopology, setBrainTopology] = useState<BrainTopology | null>(null);
+  const [neuronState, setNeuronState] = useState<NeuronState | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const nextLogId = useRef(0);
 
@@ -100,6 +121,12 @@ export function useGameSocket(wsUrl: string = process.env.NEXT_PUBLIC_WS_URL ?? 
         case "brain":
           setBrain(message.data);
           break;
+        case "brain_topology":
+          setBrainTopology(message.data);
+          break;
+        case "neuron_state":
+          setNeuronState(message.data);
+          break;
       }
     };
 
@@ -134,11 +161,16 @@ export function useGameSocket(wsUrl: string = process.env.NEXT_PUBLIC_WS_URL ?? 
   const watch = useCallback(
     (flyId: number | null) => {
       setWatchedFlyId(flyId);
-      setBrain(null); // clear stale data from whichever fly (if any) was watched before
+      // clear stale data from whichever fly (if any) was watched before
+      setBrain(null);
+      setNeuronState(null);
       send({ type: "watch", data: { fly_id: flyId } });
     },
     [send],
   );
 
-  return { status, worldInit, tick, owner, log, join, sendRequest, watchedFlyId, brain, watch };
+  return {
+    status, worldInit, tick, owner, log, join, sendRequest,
+    watchedFlyId, brain, watch, brainTopology, neuronState,
+  };
 }

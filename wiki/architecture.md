@@ -277,6 +277,14 @@ What you actually play (`decisions.md` #28). Depends on `world/`,
   new computation is two `probe()` calls (food/danger reference
   vectors), deliberately run only for whichever single fly is actually
   being watched, never the whole population every tick.
+  `brain_topology()`/`neuron_state(fly_id)` (`decisions.md` #47) extend
+  the inspector to the real neuron-graph itself: `brain_topology()` is
+  colony-wide and static (built straight from each template's own
+  `blueprint` — real MaleCNS body ids, synapse weights, and functional-
+  group index lists; identical for every fly of a kind, only
+  `synaptic_gain` ever differs per fly); `neuron_state()` is live,
+  per-fly, reading `Circuit.v`/`spikes_prev` directly — state already
+  stepped every tick regardless of whether anyone's watching.
 - **`colony_run.py`** — CLI (`python -m game.colony_run`) that runs a
   colony headlessly and logs population/births/deaths — a cheap way to
   watch it work before the real frontend exists, not the live game loop
@@ -364,6 +372,14 @@ it back, kept as its own top-level package for that reason, the same as
   broadcast, since different clients can watch different flies. Once a
   watched fly dies, the connection's watch resets to `None` so the
   server stops computing snapshots for a fly nobody can see anymore.
+  Since `decisions.md` #47, `send_brain_updates()` also sends each
+  watcher a `neuron_state` message alongside `brain` — live per-neuron
+  voltage/spike arrays for the Tier 3 graph, a separate message so
+  `brain`'s small tier 1/2 payload stays cheap for every watcher
+  regardless of whether their frontend has the graph view open.
+  `brain_topology` (colony-wide, static — every fly of a kind shares the
+  same connectome subgraph) is sent once per connection, right after
+  `world_init`, not repeated per tick.
 
 ## `frontend/` — the Next.js + Phaser client
 
@@ -378,8 +394,10 @@ talks to `server/app.py` over WebSocket only, no other coupling.
   parses every message type, exposes plain React state (`worldInit`,
   `tick`, `owner`, a request/event `log`) and actions (`join`,
   `sendRequest`, and since `decisions.md` #46, `watch(flyId)` plus
-  `watchedFlyId`/`brain` state). Everything downstream of this hook has
-  no idea a wire format exists.
+  `watchedFlyId`/`brain` state, extended in `decisions.md` #47 with
+  `brainTopology` — set once, never reset — and `neuronState`, cleared
+  the same way `brain` is on every `watch()` call). Everything
+  downstream of this hook has no idea a wire format exists.
 - **`src/components/GameCanvas.tsx`** — the Phaser grid. Redraws full
   state from scratch every tick, deliberately no incremental diffing —
   matches the wire contract's own "full state, not a diff" choice
@@ -404,6 +422,23 @@ talks to `server/app.py` over WebSocket only, no other coupling.
   trying to distinguish those cases — they're indistinguishable from the
   frontend's side of the wire contract, and the ambiguity is harmless
   (the "loading" case resolves itself within one tick).
+- **`src/components/BrainGraph.tsx`** (`decisions.md` #47) — Tier 3: a
+  live-animated view of the real connectome subgraph the watched fly's
+  circuits actually run on. A plain `<canvas>` (no Phaser — just static
+  lines/circles, no game engine needed), not another layer on
+  `GameCanvas.tsx`'s tile grid. Escape and plasticity are separate
+  views (a toggle switches between them — they never interact directly,
+  freeze+override only compares their *outputs*, `decisions.md` #5),
+  each laid out in fixed columns by real functional group (`useMemo`,
+  computed once per `brainTopology`, since topology never changes for a
+  given circuit kind) rather than a force-directed layout, which would
+  mostly hairball at plasticity's ~481-neuron scale. Redraws on every
+  `neuronState` update: a spiking neuron gets a white highlight ring, a
+  resting one's opacity tracks its membrane potential, edges are thin
+  lines with opacity scaled by real synapse weight. A dense group (e.g.
+  plasticity's ~300-neuron PAM cluster) gets a small deterministic
+  sine-based x-jitter — found necessary live, when naive fixed spacing
+  collapsed that group into one indistinguishable solid bar.
 - **`src/components/Hud.tsx`/`RequestLog.tsx`/`RequestInput.tsx`/
   `JoinScreen.tsx`** — tick/population counters and your energy meter;
   a scrolling log of your requests plus deaths/births as they happen;

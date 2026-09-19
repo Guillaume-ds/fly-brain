@@ -21,7 +21,10 @@ bundle -- which of the three tiers produced its last action, and the
 real numbers behind that decision -- entirely from state these agents
 already keep for auditing (decisions.md #26); nothing new is computed
 except on-demand `probe()` calls for whichever fly is actually being
-inspected.
+inspected. `brain_topology()`/`neuron_state()` (decisions.md #47) extend
+this to the real neuron-graph itself -- the actual connectome subgraph
+each circuit runs on, plus live per-neuron voltage/spike state for a
+watched fly, straight from `Circuit`'s own public `v`/`spikes_prev`.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ import logging
 import numpy as np
 
 from fly_brain.agent import EscapeAgent, EscapeCircuitTemplate
+from fly_brain.circuit import CircuitBlueprint
 from fly_brain.plasticity import PlasticityAgent, PlasticityCircuitTemplate
 from fly_brain.wander import DEFAULT_WANDER_PERSISTENCE, WanderAgent
 from world.env import Action, ColonyStepResult, Environment
@@ -222,6 +226,70 @@ class Colony:
                 ),
             },
         }
+
+    def brain_topology(self) -> dict:
+        """Static connectome topology for the brain inspector's Tier 3
+        neuron-graph view (decisions.md #47): real MaleCNS body ids and
+        synapse weights straight from each template's own public
+        `blueprint` (`decisions.md` #46 already established these as
+        public, non-circuit-internal data). Identical for every fly of a
+        given kind -- only `synaptic_gain` differs per fly, never
+        topology -- so this is colony-wide and worth computing once per
+        connection, not once per tick per watched fly.
+        """
+        return {
+            "escape": _serialize_topology(
+                self.escape_template.blueprint,
+                {"seed": self.escape_template.seed_idx, "motor": self.escape_template.motor_idx},
+            ),
+            "plasticity": _serialize_topology(
+                self.plasticity_template.blueprint,
+                {
+                    "kc": self.plasticity_template.kc_idx,
+                    "mbon_approach": self.plasticity_template.mbon_approach_idx,
+                    "mbon_avoid": self.plasticity_template.mbon_avoid_idx,
+                    "pam": self.plasticity_template.pam_idx,
+                    "ppl": self.plasticity_template.ppl_idx,
+                },
+            ),
+        }
+
+    def neuron_state(self, fly_id: int) -> dict | None:
+        """Live per-neuron membrane potential + spike state for a
+        watched fly's two circuits (decisions.md #47) -- `Circuit.v`/
+        `spikes_prev` are already stepped every tick regardless of
+        whether anyone's watching; this just reads them, for whichever
+        one fly is actually being inspected. Index-aligned with
+        `brain_topology()`'s `neuron_ids` ordering for the same circuit.
+        Same `None`-on-dead-or-nonexistent contract as `brain_snapshot()`.
+        """
+        if fly_id not in self.plasticity_agents:
+            return None
+        escape_circuit = self.escape_agents[fly_id].circuit
+        plasticity_circuit = self.plasticity_agents[fly_id].circuit
+        return {
+            "fly_id": fly_id,
+            "escape": {
+                "v": escape_circuit.v.tolist(),
+                "spikes": escape_circuit.spikes_prev.tolist(),
+            },
+            "plasticity": {
+                "v": plasticity_circuit.v.tolist(),
+                "spikes": plasticity_circuit.spikes_prev.tolist(),
+            },
+        }
+
+
+def _serialize_topology(blueprint: CircuitBlueprint, groups: dict[str, list[int]]) -> dict:
+    index_of = {body_id: i for i, body_id in enumerate(blueprint.neuron_ids)}
+    return {
+        "neuron_ids": blueprint.neuron_ids,
+        "edges": [
+            {"pre": index_of[edge.pre_body_id], "post": index_of[edge.post_body_id], "weight": edge.weight}
+            for edge in blueprint.edges
+        ],
+        "groups": groups,
+    }
 
 
 def run_colony(colony: Colony, max_ticks: int, audit_every: int = 50) -> list[int]:

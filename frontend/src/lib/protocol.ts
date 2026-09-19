@@ -102,13 +102,57 @@ export interface BrainSnapshot {
   };
 }
 
+/**
+ * Static, colony-wide connectome topology (wiki/decisions.md #47),
+ * mirroring game/colony.py's Colony.brain_topology() exactly. The same
+ * for every fly of a kind -- only synaptic gains differ per fly, never
+ * topology -- so this arrives once per connection, not per tick.
+ * `edges[].pre`/`post` and every index in `groups` are positions into
+ * `neuron_ids` (real MaleCNS body ids, for reference/labels only).
+ */
+export interface TopologyEdge {
+  pre: number;
+  post: number;
+  weight: number;
+}
+
+export interface CircuitTopology {
+  neuron_ids: number[];
+  edges: TopologyEdge[];
+  groups: Record<string, number[]>;
+}
+
+export interface BrainTopology {
+  escape: CircuitTopology;
+  plasticity: CircuitTopology;
+}
+
+/**
+ * Live per-neuron membrane potential + spike state for a watched fly's
+ * two circuits (wiki/decisions.md #47), mirroring
+ * Colony.neuron_state() exactly. `v`/`spikes` are index-aligned with
+ * the matching circuit's `neuron_ids` in BrainTopology.
+ */
+export interface CircuitNeuronState {
+  v: number[];
+  spikes: boolean[];
+}
+
+export interface NeuronState {
+  fly_id: number;
+  escape: CircuitNeuronState;
+  plasticity: CircuitNeuronState;
+}
+
 export type ServerMessage =
   | { type: "world_init"; data: WorldInitData }
   | { type: "tick"; data: TickData }
   | { type: "joined"; data: JoinedData }
   | { type: "request_result"; data: RequestResultData }
   | { type: "error"; data: ErrorData }
-  | { type: "brain"; data: BrainSnapshot | null };
+  | { type: "brain"; data: BrainSnapshot | null }
+  | { type: "brain_topology"; data: BrainTopology }
+  | { type: "neuron_state"; data: NeuronState | null };
 
 export type ClientMessage =
   | { type: "join"; data: { owner: string } }

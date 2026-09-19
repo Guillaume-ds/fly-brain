@@ -86,6 +86,21 @@ def test_world_init_is_sent_on_connect(templates):
         assert any(t["name"] == "spider" for t in message["data"]["mob_types"])
 
 
+def test_brain_topology_is_sent_once_right_after_world_init(templates):
+    """decisions.md #47: static, colony-wide -- sent once per connection,
+    not repeated per tick or per watched fly the way `brain`/
+    `neuron_state` are.
+    """
+    app = create_app(make_state(templates))
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        first = ws.receive_json()
+        second = ws.receive_json()
+        assert first["type"] == "world_init"
+        assert second["type"] == "brain_topology"
+        assert set(second["data"]) == {"escape", "plasticity"}
+        assert set(second["data"]["escape"]) == {"neuron_ids", "edges", "groups"}
+
+
 # --- join --------------------------------------------------------------
 
 def test_join_with_a_new_owner_spawns_a_colony(templates):
@@ -267,3 +282,64 @@ def test_brain_goes_null_and_stops_once_the_watched_fly_dies(templates):
         # message shows up.
         with pytest.raises(AssertionError):
             receive_until(ws, "brain", max_messages=10)
+
+
+# --- neuron_state (decisions.md #47) ----------------------------------------
+
+def test_watch_replies_with_an_immediate_neuron_state(templates):
+    state = make_state(templates)
+    fly_id = next(iter(state.colony.observations))
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+        ws.receive_json()  # brain_topology
+
+        ws.send_json({"type": "watch", "data": {"fly_id": fly_id}})
+        neurons = receive_until(ws, "neuron_state")
+
+        assert neurons["data"]["fly_id"] == fly_id
+        assert set(neurons["data"]["escape"]) == {"v", "spikes"}
+        assert set(neurons["data"]["plasticity"]) == {"v", "spikes"}
+
+
+def test_watch_with_fly_id_none_replies_with_a_null_neuron_state(templates):
+    app = create_app(make_state(templates))
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+        ws.receive_json()  # brain_topology
+
+        ws.send_json({"type": "watch", "data": {"fly_id": None}})
+        neurons = receive_until(ws, "neuron_state")
+
+        assert neurons["data"] is None
+
+
+def test_neuron_state_arrays_match_the_topology_neuron_counts(templates):
+    state = make_state(templates, tick_interval=0.2)
+    fly_id = next(iter(state.colony.observations))
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+        topology = ws.receive_json()  # brain_topology
+        ws.send_json({"type": "watch", "data": {"fly_id": fly_id}})
+        receive_until(ws, "neuron_state")  # the immediate reply to "watch" itself
+
+        neurons = receive_until(ws, "neuron_state", max_messages=50)
+
+        assert len(neurons["data"]["escape"]["v"]) == len(topology["data"]["escape"]["neuron_ids"])
+        assert len(neurons["data"]["plasticity"]["v"]) == len(topology["data"]["plasticity"]["neuron_ids"])
+
+
+def test_neuron_state_goes_null_once_the_watched_fly_dies(templates):
+    state = make_state(templates, tick_interval=0.2)
+    fly_id = next(iter(state.colony.observations))
+    state.colony.env.flies[0].health = 0  # dies on the first step
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+        ws.receive_json()  # brain_topology
+        ws.send_json({"type": "watch", "data": {"fly_id": fly_id}})
+        receive_until(ws, "neuron_state")  # the immediate reply to "watch" itself
+
+        neurons = receive_until(ws, "neuron_state", max_messages=50)
+        assert neurons["data"] is None

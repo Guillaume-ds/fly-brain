@@ -3173,3 +3173,116 @@ fallback message; waited 5 more seconds (several more ticks) and
 confirmed it stayed on the fallback rather than reverting to stale
 data. Screenshots taken at each stage (live, immediately after death,
 and several ticks later) all match the expected sequence.
+
+## 47. Brain inspector Tier 3: the real neuron-graph, live
+
+**Context:** #46 shipped tiers 1+2 and deliberately left Tier 3 (a real
+neuron-graph visualization) as a design only, per explicit scope. Asked
+directly to build it now.
+
+**What "real" means here, concretely, not just summary numbers:** the
+actual connectome subgraph a watched fly's circuit runs on (real
+MaleCNS body ids, real synapse weights, from each template's own
+public `blueprint` -- `decisions.md` #46 already established this data
+as public, non-circuit-internal), with live per-neuron membrane-
+potential/spike animation from `Circuit.v`/`spikes_prev`, which are
+already stepped every tick regardless of whether anyone's watching.
+
+**Design calls made, building on #46's open questions:**
+1. **Escape and plasticity shown as separate views, not one graph.**
+   They never interact directly -- freeze+override only compares their
+   *outputs* (`decisions.md` #5) -- so combining them into one graph
+   would imply a connection that isn't real. A toggle switches between
+   them; both share the same watched fly.
+2. **Layout: fixed columns by real functional group, not force-
+   directed.** At plasticity's scale (~481 neurons: ~100 KC, ~50 MBON
+   split approach/avoid, ~331 DAN split PAM/PPL, `decisions.md` #26) a
+   generic force-directed layout would mostly produce a hairball. The
+   template already carries these real functional groups (`kc_idx`,
+   `mbon_approach_idx`, etc.) -- used directly as layout columns (KC →
+   MBON approach/avoid → PAM/PPL DAN) instead. Escape (~60 neurons) gets
+   the same treatment: seed → other → motor.
+3. **Live streaming, not a static snapshot.** Bandwidth was flagged in
+   #46's plan as an open question; resolved by measurement, not
+   speculation -- a ~481-float `v` array plus a ~481-bool `spikes` array
+   per tick, for the one fly actually being watched (never the whole
+   population, same discipline as `probe()` in #46), is a few KB per
+   tick for one connection. Not worth a delta-encoding scheme at this
+   scale.
+4. **Topology sent once per connection, not once per tick.** Topology
+   is identical for every fly of a kind (only `synaptic_gain` differs
+   per fly) -- computing/sending it per tick would be pure waste. Sent
+   once, right after `world_init`; only the live `v`/`spikes` arrays
+   repeat per tick, and only while a client is actually watching
+   someone.
+5. **A separate `neuron_state` message, not folded into `brain`.**
+   Keeps tier 1/2's `brain` message small for every watcher regardless
+   of whether their frontend has the graph view open at all -- the
+   payload that actually costs something is opt-in by nature of what
+   it's for, not bundled into the cheap path.
+
+**What was built:**
+- `game/colony.py` — `Colony.brain_topology()` (colony-wide, static:
+  real body ids/edges/functional-group indices for both circuits, built
+  straight from each template's `blueprint`) and `Colony.neuron_state
+  (fly_id)` (live `v`/`spikes_prev` for one fly's two circuits, `None`
+  under the same dead-or-nonexistent contract as `brain_snapshot()`).
+- `server/app.py` — `brain_topology` sent once per connection after
+  `world_init`; `neuron_state` sent alongside `brain` for every
+  watching connection after each tick (and as an immediate reply to
+  `watch`, mirroring `brain`'s own immediate-reply behavior).
+- `frontend/` — `protocol.ts` gained `BrainTopology`/`NeuronState`
+  types and the two new message types; `useGameSocket.ts` exposes
+  `brainTopology`/`neuronState`. New `BrainGraph.tsx`: a plain
+  `<canvas>` renderer (not Phaser -- no game engine needed for static
+  lines/circles), column layout computed once per topology (`useMemo`),
+  redrawn on every `neuron_state` update; a spiking neuron gets a white
+  highlight ring, a resting one's opacity tracks its membrane potential;
+  edges drawn as thin lines, opacity scaled by real synapse weight. A
+  circuit toggle (escape/plasticity) and a show/hide collapse (canvas
+  only mounts while open, so a closed panel costs nothing to render).
+
+**A real legibility bug found live, not just built and typechecked:**
+plasticity's ~300-neuron PAM group, packed into one column at its
+naive fixed spacing, rendered as a solid gold bar -- individual points
+were literally closer together than their own radius, so no single
+neuron was visible at all. Caught by actually looking at a live
+screenshot, not by reasoning about it in advance. Fixed with a small
+deterministic sine-based x-jitter for any group above a size
+threshold (25), applied identically every render (not literally
+random, which would flicker) -- turned the solid bar back into a
+legible scatter where individual spikes are visible again, confirmed
+in a second live screenshot after the fix.
+
+**Verified live:** ran the real backend and real frontend dev server
+together, Playwright driving the browser. Watched a real fly, switched
+between the escape and plasticity views, confirmed real edges/nodes
+render for both (escape: seed → other → motor fan-out; plasticity: KC
+→ MBON approach/avoid, PAM/PPL DAN columns, legend matching), and
+confirmed live animation -- the panel's own numbers (`current pull`,
+`danger sensed`) changed between two screenshots taken several ticks
+apart, alongside the tick counter advancing, establishing the
+WebSocket stream was genuinely live rather than a frozen first frame.
+
+**Not done, deliberately out of scope here:** excitatory/inhibitory
+edge coloring (the sign comes from each template's separate
+`neurotransmitters` series, not part of `CircuitBlueprint.edges` --
+would need its own field on the wire; a real, honest simplification
+for v1, not a fabricated color); a force-directed layout (rejected by
+design, see above, not merely deferred); a dedicated frontend test
+suite for `BrainGraph.tsx` (same standing gap as #45/#46, verified
+live instead).
+
+Tests: `tests/test_brain_topology.py` (new, 8 tests) — both circuits'
+topology has the expected shape; edge and group indices are always
+valid positions into `neuron_ids`; group contents match the templates'
+own index lists exactly; topology is identical across repeated calls
+(colony-wide, not per-fly); `neuron_state()` returns `None` for a
+nonexistent/dead fly; live arrays are index-aligned with topology and
+match the real circuit's own `v`/`spikes_prev` after a real `step()`.
+`tests/test_server.py` extended (5 new tests) — `brain_topology` is
+sent exactly once, right after `world_init`; `watch` gets an immediate
+`neuron_state` reply (including the `fly_id: None` case); array lengths
+match topology's neuron counts; a watched fly's death sends one `null`
+`neuron_state` message. 171 Python tests passing total; frontend passes
+`next lint`, `tsc --noEmit`, and `next build` clean.

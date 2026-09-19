@@ -28,6 +28,14 @@ watch different flies. Watching costs nothing for connections that
 aren't doing it (`brain_snapshot()` is only ever called for fly ids
 someone actually asked to watch).
 
+Watching also gets a `neuron_state` message alongside `brain` every
+tick -- live per-neuron voltage/spike arrays for the watched fly's two
+circuits, feeding the Tier 3 neuron-graph view (decisions.md #47). The
+static topology those arrays are index-aligned against (`Colony.
+brain_topology()` -- real MaleCNS body ids and synapse weights, the
+same for every fly of a kind) is sent once per connection, right after
+`world_init`, not repeated per tick.
+
 Run as: python -m server.app  (or: uvicorn server.app:app)
 """
 
@@ -141,16 +149,26 @@ async def send_brain_updates(state: AppState) -> None:
     fly died this tick: sent through as `data: null` so the frontend can
     show "this fly died" once, then the watch is cleared server-side so
     it isn't recomputed (as a `None` lookup) every tick after.
+
+    Also sends `neuron_state` alongside `brain` (decisions.md #47) --
+    the live per-neuron voltage/spike arrays behind the Tier 3
+    neuron-graph view, for the same one watched fly. A second message
+    rather than folding into `brain` on purpose: `brain`'s tier-1/2
+    numbers stay cheap and small for every watcher regardless of whether
+    their frontend has the graph view open at all; `neuron_state`'s
+    ~500-float payload is the one that actually costs something.
     """
     dead: set[WebSocket] = set()
     for websocket, fly_id in list(state.watching.items()):
         if fly_id is None:
             continue
         snapshot = state.colony.brain_snapshot(fly_id)
+        neurons = state.colony.neuron_state(fly_id)
         if snapshot is None:
             state.watching[websocket] = None
         try:
             await websocket.send_json({"type": "brain", "data": snapshot})
+            await websocket.send_json({"type": "neuron_state", "data": neurons})
         except Exception:
             dead.add(websocket)
     for websocket in dead:
@@ -207,7 +225,9 @@ async def handle_message(message: dict, websocket: WebSocket, state: AppState) -
         fly_id = data.get("fly_id")
         state.watching[websocket] = fly_id
         snapshot = state.colony.brain_snapshot(fly_id) if fly_id is not None else None
+        neurons = state.colony.neuron_state(fly_id) if fly_id is not None else None
         await websocket.send_json({"type": "brain", "data": snapshot})
+        await websocket.send_json({"type": "neuron_state", "data": neurons})
 
     else:
         await websocket.send_json({"type": "error", "data": {"message": f"unknown message type {message_type!r}"}})
@@ -240,6 +260,11 @@ def create_app(state: AppState | None = None) -> FastAPI:
         game_state.connections.add(websocket)
         game_state.watching[websocket] = None
         await websocket.send_json({"type": "world_init", "data": serialize_world_init(game_state.colony.env)})
+        # decisions.md #47: static, colony-wide (every fly of a kind
+        # shares the same connectome subgraph) -- sent once per
+        # connection here, not per tick/per watched fly like `brain`/
+        # `neuron_state` below.
+        await websocket.send_json({"type": "brain_topology", "data": game_state.colony.brain_topology()})
         try:
             while True:
                 message = await websocket.receive_json()
