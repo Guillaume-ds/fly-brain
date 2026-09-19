@@ -286,8 +286,10 @@ class Environment:
         self.mobs: list[Mob]
         self.items: list[Item]
         self.tiles: list[Tile]
+        self.corpses: list[Corpse]
         self.tick: int
         self.next_fly_id: int
+        self.next_entity_id: int
         self.reset()
 
     @property
@@ -510,6 +512,7 @@ class Environment:
     def reset(self) -> dict[int, Observation]:
         self.tick = 0
         self.next_fly_id = 0
+        self.next_entity_id = 0  # shared across item/tile/mob/corpse (decisions.md #43); flies have their own id space
         self.mobs = []
         self.items = []
         self.tiles = []
@@ -636,6 +639,20 @@ class Environment:
             return self.random_empty_cell(self.occupied_cells())
         return self.random_nearby_empty_cell(spawn_near, TARGET_SPAWN_RADIUS)
 
+    def _new_entity_id(self) -> int:
+        """One shared id space for item/tile/mob/corpse (decisions.md
+        #43) -- a future API layer serializing world state for a human
+        player needs a stable id per world object to track across ticks,
+        the same reason `Fly` already has one. Flies keep their own
+        separate space (`next_fly_id`); this never overlaps with it, but
+        callers should still key by (kind, id) or rely on each wire
+        message's own separate item/tile/mob/corpse arrays, not assume
+        global uniqueness across flies too.
+        """
+        entity_id = self.next_entity_id
+        self.next_entity_id += 1
+        return entity_id
+
     def spawn_of(self, entity_class: type, item_type: ItemType):
         """One spawn path for Item and Tile -- a cell (near `spawn_near`
         if the type has one, decisions.md #34; anywhere otherwise), the
@@ -649,6 +666,8 @@ class Environment:
             item_type.radius,
             jitter(item_type.attributes, self.item_jitter_sigma, self.rng),
             item_type.strength,
+            id=self._new_entity_id(),
+            type_name=item_type.name,
         )
 
     def spawn_mob_of(self, mob_type: MobType) -> Mob:
@@ -663,6 +682,8 @@ class Environment:
             jitter(mob_type.attributes, self.item_jitter_sigma, self.rng),
             mob_type.effect,
             mob_type.strength,
+            id=self._new_entity_id(),
+            type_name=mob_type.name,
         )
 
     def resolve_item_pickup(self) -> None:
@@ -837,6 +858,7 @@ class Environment:
                 radius=self.corpse_radius,
                 attributes=jitter(self.corpse_attributes, self.item_jitter_sigma, self.rng),
                 hunger_value=fly.hunger * CORPSE_HUNGER_FRACTION,
+                id=self._new_entity_id(),
             )
         )
 

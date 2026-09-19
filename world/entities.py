@@ -4,7 +4,7 @@ purpose -- placement, movement, and rules all live in env.py.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 
 import numpy as np
 
@@ -35,12 +35,21 @@ class Item:
     to pick it up. Since decisions.md #39, sensing distance is a separate,
     much larger, shared constant (`Environment.WORLD_SENSING_RADIUS`);
     `radius` no longer governs perception at all.
+
+    `id`/`type_name` (decisions.md #43) exist purely for consumers
+    outside the fly's own anonymity contract -- a future API layer
+    serializing world state for a human player to render, never anything
+    a fly perceives. `type_name` is real (`ItemType.name`, e.g. "food"),
+    unlike anything that reaches a fly through `attributes`/`Percept`.
     """
 
     position: Position
     radius: float
     attributes: np.ndarray
     strength: int
+    _: KW_ONLY
+    id: int
+    type_name: str
 
 
 @dataclass
@@ -53,12 +62,17 @@ class Tile:
     fraction of what a one-shot item pickup would give
     (`Environment.resolve_tile_effects()`), rather than being removed on
     contact.
+
+    `id`/`type_name` -- see `Item`'s docstring, same reasoning exactly.
     """
 
     position: Position
     radius: float
     attributes: np.ndarray
     strength: int
+    _: KW_ONLY
+    id: int
+    type_name: str
 
 
 @dataclass
@@ -83,6 +97,8 @@ class Mob:
     mob always has both set, and its contact effect is graded per tick
     of contact, not instant (decisions.md #31) -- see
     `Environment.resolve_mob_contact()`.
+
+    `id`/`type_name` -- see `Item`'s docstring, same reasoning exactly.
     """
 
     position: Position
@@ -90,6 +106,9 @@ class Mob:
     attributes: np.ndarray
     effect: Effect | None = None
     strength: int | None = None
+    _: KW_ONLY
+    id: int
+    type_name: str
 
 
 @dataclass
@@ -105,12 +124,19 @@ class Corpse:
     exactly what that fly had left, not an encoder's guess at it.
     `attributes` exists purely so a corpse is perceivable like anything
     else; it carries no relationship to `hunger_value`.
+
+    `id`/`type_name` -- see `Item`'s docstring, same reasoning exactly.
+    `type_name` has a fixed default since a corpse has no type registry
+    of its own to look a name up in -- there's only ever one kind.
     """
 
     position: Position
     radius: float
     attributes: np.ndarray
     hunger_value: float
+    _: KW_ONLY
+    id: int
+    type_name: str = "corpse"
 
 
 @dataclass

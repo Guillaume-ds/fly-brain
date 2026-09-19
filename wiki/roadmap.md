@@ -38,7 +38,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | Stage 3 (forage transfer via freeze+override) | **mechanism found already superseded and verified live** (`decisions.md` #36) — `Colony`'s existing frozen-escape + live-plasticity combination *is* #5's freeze+override design; real learning confirmed with a stage-2 checkpoint. Attribution (#37), hunger-loss punishment (#38), sensing radius (#39), and evolved wander (#40) are all fixed now — every piece the design called for is in place; a real, longer colony-scale foraging run hasn't been done yet to confirm it all adds up in practice |
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
-| Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19), not started — deliberately deferred until the core Python game loop works end to end |
+| Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **decided** (`decisions.md` #19) — its precondition (reproduction + a live director loop) has been met since #20/#23. Wire-format contract designed (`tick`/`world_init` broadcasts built from `Environment`'s real object graph, `player_request`/`request_result` mapping directly onto `game/live_run.py`'s existing `apply_requests()`); the `Item`/`Tile`/`Mob`/`Corpse` id/type_name fields it needs are done (`decisions.md` #43). The FastAPI+WebSocket server and the Next.js/Phaser frontend itself are not started |
 
 ## Immediate next steps, in order
 
@@ -320,7 +320,17 @@ yet started (see "After that" below).
 - **Frontend** — FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3
   rendering (`decisions.md` #19). The core Python game loop it was
   deferred until (reproduction mechanic + a live director loop) is now
-  done (`decisions.md` #23) — unblocked, not yet started.
+  done (`decisions.md` #23). Wire-format contract designed: a `tick`
+  broadcast built from `Environment`'s real object graph (never a fly's
+  own anonymous `Percept`/`Observation` -- a human player isn't bound by
+  #22's anonymity contract), and `player_request`/`request_result`
+  messages mapping directly onto `game/live_run.py`'s existing
+  `apply_requests()` -- the frontend just forwards free text, exactly
+  like typing into the CLI today. That design surfaced two real gaps,
+  now fixed: entities had no stable id or real type name to serialize
+  (`decisions.md` #43, `Item`/`Tile`/`Mob`/`Corpse` gained both). Still
+  not started: the actual FastAPI+WebSocket server, and the Next.js/
+  Phaser frontend itself.
 - **Structure/effect split for items, threats, and tiles** — separating
   *what moves/is consumed/occupies an area* (structure, discrete,
   tool-selected) from *what it does to a fly* (effect, continuous,

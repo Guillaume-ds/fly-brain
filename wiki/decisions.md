@@ -2809,3 +2809,65 @@ that's new evidence this entry doesn't have.
 No source changes — `world/env.py`'s constants are untouched. This
 entry exists to record that they were checked and kept deliberately,
 not left alone by default.
+
+## 43. `Item`/`Tile`/`Mob`/`Corpse` gain `id`/`type_name`
+
+**Context:** designing the FastAPI+WebSocket wire-format contract for
+the frontend (decisions.md #19's deferred track — its own precondition,
+reproduction + a live director loop, has been met since #20/#23). The
+proposed `tick` broadcast needs a stable id per world object (so the
+client can track "this is the same tile" across ticks rather than
+re-rendering from scratch) and a real name (to pick a sprite/label).
+Neither existed — only `Fly` had `id`; nothing had a name reference back
+to its registered type.
+
+**Decision: add `id: int` and `type_name: str` to `Item`/`Tile`/`Mob`/
+`Corpse`, assigned at spawn time.** One shared counter
+(`Environment.next_entity_id`, mirroring `next_fly_id`'s own pattern)
+covers all four kinds — deliberately a separate space from `Fly`'s,
+not because collision would break anything (every wire message keeps
+items/tiles/mobs/corpses in separate arrays) but because a fly's id
+means something structurally different (birth/death tracking) and
+conflating the two spaces would just be confusing. `type_name` is set
+from the real registered type at spawn (`ItemType.name`/`MobType.name`,
+e.g. `"food"`, or a player-created type's own name) — `Corpse` gets a
+fixed `type_name="corpse"` default since it has no type registry of its
+own to look a name up in.
+
+**Added via `dataclasses.KW_ONLY`, not by changing existing field
+order.** `Mob` already had trailing default fields (`effect`,
+`strength`); inserting new required fields before them would violate
+ordinary positional-field ordering, and reordering existing fields would
+break every positional construction site across the codebase for no
+reason. Marking `id`/`type_name` keyword-only after a `_: KW_ONLY`
+sentinel sidesteps both problems — existing fields keep their exact
+positional shape, the two new ones must be passed by keyword, which
+also makes every construction site self-documenting. Checked before
+committing to this: exactly two direct construction sites exist in the
+whole codebase (`spawn_mob_of()`, `_spawn_corpse()`) plus the shared
+`spawn_of()` path for `Item`/`Tile` — no test constructs these
+dataclasses directly, all go through those spawn methods, so this
+touched nothing outside `world/env.py`.
+
+**The boundary this deliberately does not cross: a fly never sees
+either field.** `observe()`'s `perceive()` only ever extracts
+`entity.attributes` into a `Percept` — `id`/`type_name` exist purely for
+a consumer *outside* the fly's own anonymity contract (a human player,
+through a future API layer), never inside it (`decisions.md` #22). Not
+a new exception to that contract, a new field that was never going to
+be part of it.
+
+**A stale doc caught along the way:** `wiki/architecture.md` still
+described `Item.radius` as "both how far it can be perceived and how
+close a fly must be to pick it up" — true before #39, false since (the
+`entities.py` docstring itself was corrected in #41, but this mirror in
+architecture.md was missed). Corrected here, along with adding `Corpse`
+to architecture.md's entity list, which had never mentioned it at all.
+
+Tests: `tests/test_entity_identity.py` (new, 8 tests) — every kind
+carries its real `type_name` (including the built-in food, and a fixed
+`"corpse"` default); ids are unique across all four kinds sharing one
+counter; the counter resets with the environment; and the one test that
+actually matters — `id`/`type_name` never appear on a `Percept`,
+`Observation.nearby` stays exactly `{attributes, dx, dy, distance}`
+regardless. 128 tests passing total.

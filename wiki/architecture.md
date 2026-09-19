@@ -35,24 +35,36 @@ path.
 ## `world/` — the simulation
 
 - **`entities.py`** — plain dataclasses: `Position`, `Item`, `Tile`,
-  `Mob`, `Fly`. There is exactly **one** item entity (`decisions.md`
-  #28): food is not a class, it's a registered `ItemType` like any
-  player-created one. `Item` is stationary, single-use, and has no
-  behavior beyond what its attribute vector produces through the Result
-  registry, scaled by `strength`'s magnitude (`decisions.md` #32);
-  `radius` is both how far it can be perceived and how close a fly must
-  be to pick it up — one distance, one name. `Tile` is `Item` in every
-  way except never consumed: its effect re-applies at a fraction of
-  strength every tick a fly stays within radius (`decisions.md` #31).
-  `Mob` (renamed from `Threat`, #31) is the documented exception: same
-  shape, same anonymous perception, but it moves, is never consumed, and
-  its effect (if any) is authored from `effect`/`strength` directly,
-  never derived from the Result registry (`decisions.md` #30) — the
-  built-in spider still kills unconditionally through
-  `determine_fly_death()` (`effect=None`), a created mob deals graded
-  per-tick contact damage/heal/etc instead (see its docstring for why).
-  `Fly` carries id, position, hunger, `health`, `stuck_ticks`, and
-  `vulnerable_ticks_left`. No behavior, just data.
+  `Mob`, `Corpse`, `Fly`. There is exactly **one** item entity
+  (`decisions.md` #28): food is not a class, it's a registered
+  `ItemType` like any player-created one. `Item` is stationary,
+  single-use, and has no behavior beyond what its attribute vector
+  produces through the Result registry, scaled by `strength`'s
+  magnitude (`decisions.md` #32); `radius` is interaction distance
+  only — how close a fly must be to pick it up. Sensing distance is a
+  separate, much larger, shared constant since `decisions.md` #39
+  (`Environment.WORLD_SENSING_RADIUS`), not `radius` at all anymore.
+  `Tile` is `Item` in every way except never consumed: its effect
+  re-applies at a fraction of strength every tick a fly stays within
+  radius (`decisions.md` #31). `Mob` (renamed from `Threat`, #31) is the
+  documented exception: same shape, same anonymous perception, but it
+  moves, is never consumed, and its effect (if any) is authored from
+  `effect`/`strength` directly, never derived from the Result registry
+  (`decisions.md` #30) — the built-in spider still kills unconditionally
+  through `determine_fly_death()` (`effect=None`), a created mob deals
+  graded per-tick contact damage/heal/etc instead (see its docstring for
+  why). `Corpse` (`decisions.md` #41) is what any fly's death leaves
+  behind — structurally an `Item` (same anonymous perception, single-use)
+  except its food value is authored per instance from the dead fly's own
+  hunger, never derived from `attributes`. `Fly` carries id, position,
+  hunger, `health`, `stuck_ticks`, and `vulnerable_ticks_left`. As of
+  `decisions.md` #43, `Item`/`Tile`/`Mob`/`Corpse` also each carry `id`
+  (one shared counter, separate from `Fly`'s own) and `type_name` (the
+  real registered type name, e.g. "food") — for a future API layer
+  serializing world state to a human player, never for a fly: `observe()`
+  only ever extracts `attributes` into a `Percept`, so neither field ever
+  crosses the anonymity boundary (`decisions.md` #22). No behavior, just
+  data.
 - **`items.py`** (`decisions.md` #22/#24/#27) — the content-authoring
   pipeline that turns a short text description into an item's small,
   fixed-dimension attribute vector: `ItemEncoder` is a swap point (same
