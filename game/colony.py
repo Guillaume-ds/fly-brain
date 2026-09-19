@@ -15,6 +15,13 @@ Each fly also gets a WanderAgent (fly_brain/wander.py, decisions.md
 perceives nothing at all, inherited and mutated at birth the same way
 escape gains are -- fixed for a fly's whole lifetime, never touched by
 reinforce().
+
+`brain_snapshot()` (decisions.md #46) assembles a per-fly diagnostic
+bundle -- which of the three tiers produced its last action, and the
+real numbers behind that decision -- entirely from state these agents
+already keep for auditing (decisions.md #26); nothing new is computed
+except on-demand `probe()` calls for whichever fly is actually being
+inspected.
 """
 
 from __future__ import annotations
@@ -56,6 +63,12 @@ class Colony:
         self.escape_agents: dict[int, EscapeAgent] = {}
         self.plasticity_agents: dict[int, PlasticityAgent] = {}
         self.wander_agents: dict[int, WanderAgent] = {}
+        # decisions.md #46: which tier (escape/wander/plasticity) produced
+        # each fly's most recent action -- set every tick in step(), read by
+        # brain_snapshot(). A fly has no entry until its first real decision
+        # tick (never true for initial population, briefly true for a
+        # newborn between being added to env.flies and its first step()).
+        self.last_action_source: dict[int, str] = {}
         for fly_id in self.observations:
             self.escape_agents[fly_id] = self.spawn_escape_agent(initial_escape_gains)
             self.plasticity_agents[fly_id] = self.spawn_plasticity_agent(None)
@@ -109,11 +122,15 @@ class Colony:
             # as a fallback under escape, same freeze+override precedence
             # as always (decisions.md #5/#22): the reflex still wins.
             wander_action = self.wander_agents[fly_id].decide(obs, self.rng)
-            actions[fly_id] = (
-                escape_action
-                if escape_action is not None
-                else wander_action if wander_action is not None else plasticity_action
-            )
+            if escape_action is not None:
+                actions[fly_id] = escape_action
+                self.last_action_source[fly_id] = "escape"
+            elif wander_action is not None:
+                actions[fly_id] = wander_action
+                self.last_action_source[fly_id] = "wander"
+            else:
+                actions[fly_id] = plasticity_action
+                self.last_action_source[fly_id] = "plasticity"
 
         result = self.env.step(actions)
 
@@ -145,6 +162,7 @@ class Colony:
             del self.escape_agents[dead_id]
             del self.plasticity_agents[dead_id]
             del self.wander_agents[dead_id]
+            self.last_action_source.pop(dead_id, None)
 
         self.observations = result.observations
         return result
@@ -160,6 +178,50 @@ class Colony:
         drifts = [agent.gain_drift() for agent in self.plasticity_agents.values()]
         events = sum(agent.reinforcement_events for agent in self.plasticity_agents.values())
         return {"mean_gain_drift": float(np.mean(drifts)), "total_reinforcement_events": events}
+
+    def brain_snapshot(self, fly_id: int) -> dict | None:
+        """Per-fly diagnostic bundle for a "brain inspector" (decisions.md
+        #46): which tier produced its last action and the real numbers
+        behind that decision, assembled entirely from state these agents
+        already keep for auditing (decisions.md #26) -- `last_danger_
+        strength`/`last_valence` are cached from the tick that just ran,
+        `gain_drift()`/`reinforcement_events`/`cumulative_dopamine` are
+        already-existing hooks. The only genuinely new computation is the
+        two `probe()` calls, deliberately run only for whichever single
+        fly is actually being inspected, not for the whole population
+        every tick -- `probe()` steps a disposable circuit copy twice, real
+        but modest cost that isn't worth paying for flies nobody is
+        looking at.
+
+        `None` if `fly_id` doesn't exist (dead, or never did) -- the
+        caller's cue to stop watching it.
+        """
+        if fly_id not in self.plasticity_agents:
+            return None
+        escape_agent = self.escape_agents[fly_id]
+        plasticity_agent = self.plasticity_agents[fly_id]
+        wander_agent = self.wander_agents[fly_id]
+        return {
+            "fly_id": fly_id,
+            "action_source": self.last_action_source.get(fly_id),
+            "escape": {
+                "danger_strength": escape_agent.last_danger_strength,
+            },
+            "plasticity": {
+                "valence": plasticity_agent.last_valence,
+                "gain_drift": plasticity_agent.gain_drift(),
+                "reinforcement_events": plasticity_agent.reinforcement_events,
+                "cumulative_dopamine": plasticity_agent.cumulative_dopamine,
+                "probe_food": float(plasticity_agent.probe(self.env.food_type.attributes)),
+                "probe_danger": float(plasticity_agent.probe(self.escape_template.danger_vector)),
+            },
+            "wander": {
+                "persistence": wander_agent.persistence,
+                "current_direction": (
+                    wander_agent.current_direction.name if wander_agent.current_direction is not None else None
+                ),
+            },
+        }
 
 
 def run_colony(colony: Colony, max_ticks: int, audit_every: int = 50) -> list[int]:

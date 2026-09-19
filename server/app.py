@@ -20,6 +20,14 @@ turn -- safe without any extra locking, and requests apply immediately
 on receipt rather than needing a queue-and-drain pattern the way a real
 OS thread would.
 
+A client can also `watch` a single fly_id: after every tick, whichever
+connections are watching a live fly each get their own `brain` message
+carrying `Colony.brain_snapshot()` (decisions.md #46) for just that fly
+-- a per-connection send, not a broadcast, since different clients can
+watch different flies. Watching costs nothing for connections that
+aren't doing it (`brain_snapshot()` is only ever called for fly ids
+someone actually asked to watch).
+
 Run as: python -m server.app  (or: uvicorn server.app:app)
 """
 
@@ -63,6 +71,12 @@ class AppState:
     escape_gains: np.ndarray  # so a joining owner's colony starts from the same trained/loaded gains
     tick_interval: float
     connections: set[WebSocket] = field(default_factory=set)
+    # decisions.md #46: which fly (if any) each connected client wants a
+    # "brain" message for after every tick. Entry exists for every
+    # connected websocket from the moment it connects (None = not
+    # watching); populated/cleared by the "watch" message and cleared
+    # back to None by send_brain_updates() once a watched fly dies.
+    watching: dict[WebSocket, int | None] = field(default_factory=dict)
 
 
 def build_controller(name: str) -> WorldController:
@@ -120,6 +134,30 @@ async def broadcast(connections: set[WebSocket], payload: dict) -> None:
     connections -= dead
 
 
+async def send_brain_updates(state: AppState) -> None:
+    """Per-connection, not a broadcast -- each client watches at most one
+    fly, and different clients can watch different flies (decisions.md
+    #46). `colony.brain_snapshot()` returning `None` means the watched
+    fly died this tick: sent through as `data: null` so the frontend can
+    show "this fly died" once, then the watch is cleared server-side so
+    it isn't recomputed (as a `None` lookup) every tick after.
+    """
+    dead: set[WebSocket] = set()
+    for websocket, fly_id in list(state.watching.items()):
+        if fly_id is None:
+            continue
+        snapshot = state.colony.brain_snapshot(fly_id)
+        if snapshot is None:
+            state.watching[websocket] = None
+        try:
+            await websocket.send_json({"type": "brain", "data": snapshot})
+        except Exception:
+            dead.add(websocket)
+    for websocket in dead:
+        state.watching.pop(websocket, None)
+        state.connections.discard(websocket)
+
+
 async def tick_loop(state: AppState) -> None:
     """Runs forever -- a server outlives any one colony's extinction,
     unlike `live_run.py`'s CLI session, which ends when its one colony
@@ -139,6 +177,7 @@ async def tick_loop(state: AppState) -> None:
         await asyncio.sleep(state.tick_interval)
         result = state.colony.step()
         await broadcast(state.connections, {"type": "tick", "data": serialize_tick(state.colony.env, result)})
+        await send_brain_updates(state)
 
 
 async def handle_message(message: dict, websocket: WebSocket, state: AppState) -> None:
@@ -159,6 +198,16 @@ async def handle_message(message: dict, websocket: WebSocket, state: AppState) -
         text = data.get("text", "")
         for request_text, status in apply_requests([(text, owner)], state.controller, state.actions):
             await websocket.send_json({"type": "request_result", "data": {"text": request_text, "status": status}})
+
+    elif message_type == "watch":
+        # decisions.md #46: fly_id=None explicitly unwatches (the "stop
+        # watching" case, e.g. the frontend closing the brain panel), not
+        # just "no argument given" -- same field either way, so there's
+        # no separate "unwatch" message type to keep in sync.
+        fly_id = data.get("fly_id")
+        state.watching[websocket] = fly_id
+        snapshot = state.colony.brain_snapshot(fly_id) if fly_id is not None else None
+        await websocket.send_json({"type": "brain", "data": snapshot})
 
     else:
         await websocket.send_json({"type": "error", "data": {"message": f"unknown message type {message_type!r}"}})
@@ -189,6 +238,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         game_state: AppState = websocket.app.state.game
         await websocket.accept()
         game_state.connections.add(websocket)
+        game_state.watching[websocket] = None
         await websocket.send_json({"type": "world_init", "data": serialize_world_init(game_state.colony.env)})
         try:
             while True:
@@ -198,6 +248,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
             pass
         finally:
             game_state.connections.discard(websocket)
+            game_state.watching.pop(websocket, None)
 
     return application
 

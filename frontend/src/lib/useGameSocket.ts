@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ClientMessage, ServerMessage, TickData, WorldInitData } from "./protocol";
+import type { BrainSnapshot, ClientMessage, ServerMessage, TickData, WorldInitData } from "./protocol";
 
 const DEFAULT_WS_URL = "ws://localhost:8000/ws";
 
@@ -22,6 +22,18 @@ export interface GameSocket {
   log: LogEntry[];
   join: (owner: string) => void;
   sendRequest: (text: string) => void;
+  /** The fly id most recently sent via watch(), or null if not watching
+   * anyone -- distinct from `brain`, which can lag behind by one message
+   * (still the previous fly) right after switching.
+   */
+  watchedFlyId: number | null;
+  /** Latest "brain" message: the watched fly's diagnostic snapshot, null
+   * if not watching, or null once the watched fly has died (decisions.md
+   * #46) -- server stops sending further updates for a dead fly, so this
+   * stays null rather than going stale.
+   */
+  brain: BrainSnapshot | null;
+  watch: (flyId: number | null) => void;
 }
 
 /** Owns the one WebSocket connection to server/app.py, parses every
@@ -34,6 +46,8 @@ export function useGameSocket(wsUrl: string = process.env.NEXT_PUBLIC_WS_URL ?? 
   const [tick, setTick] = useState<TickData | null>(null);
   const [owner, setOwner] = useState<string | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [watchedFlyId, setWatchedFlyId] = useState<number | null>(null);
+  const [brain, setBrain] = useState<BrainSnapshot | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const nextLogId = useRef(0);
 
@@ -83,6 +97,9 @@ export function useGameSocket(wsUrl: string = process.env.NEXT_PUBLIC_WS_URL ?? 
         case "error":
           appendLog("error", message.data.message);
           break;
+        case "brain":
+          setBrain(message.data);
+          break;
       }
     };
 
@@ -114,5 +131,14 @@ export function useGameSocket(wsUrl: string = process.env.NEXT_PUBLIC_WS_URL ?? 
     [owner, send],
   );
 
-  return { status, worldInit, tick, owner, log, join, sendRequest };
+  const watch = useCallback(
+    (flyId: number | null) => {
+      setWatchedFlyId(flyId);
+      setBrain(null); // clear stale data from whichever fly (if any) was watched before
+      send({ type: "watch", data: { fly_id: flyId } });
+    },
+    [send],
+  );
+
+  return { status, worldInit, tick, owner, log, join, sendRequest, watchedFlyId, brain, watch };
 }

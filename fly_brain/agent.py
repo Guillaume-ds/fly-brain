@@ -127,6 +127,10 @@ class EscapeAgent:
         self.seed_idx = template.seed_idx
         self.motor_idx = template.motor_idx
         self.danger_vector = template.danger_vector
+        # Auditing (decisions.md #46, mirrors PlasticityAgent.last_valence):
+        # cached from the most recent decide() call so a consumer (the
+        # brain-inspector panel) can read "why" without recomputing it.
+        self.last_danger_strength = 0.0
 
     def reset(self) -> None:
         self.circuit.reset()
@@ -139,6 +143,7 @@ class EscapeAgent:
         forcing STAY whenever the escape reflex has nothing to say.
         """
         flee_dx, flee_dy, danger_strength = sense_danger(obs.nearby, self.danger_vector)
+        self.last_danger_strength = danger_strength
 
         current = np.zeros(self.circuit.n)
         current[self.seed_idx] += danger_strength * self.stim_gain

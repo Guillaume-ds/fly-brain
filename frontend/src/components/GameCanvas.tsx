@@ -24,6 +24,12 @@ interface GameCanvasProps {
   worldInit: WorldInitData;
   tick: TickData | null;
   myOwner: string;
+  /** Fired with a fly's id on click (decisions.md #46) -- the frontend's
+   * only entry point into "watch this fly's brain". Not called for a
+   * click that doesn't land on any fly.
+   */
+  onFlyClick?: (flyId: number) => void;
+  watchedFlyId?: number | null;
 }
 
 /** A thin wrapper around one Phaser.Game: redraws the grid from scratch
@@ -34,13 +40,18 @@ interface GameCanvasProps {
  * fly -- simpler, and this is a "simple colored shapes" v1
  * (decisions.md #45).
  */
-export function GameCanvas({ worldInit, tick, myOwner }: GameCanvasProps) {
+export function GameCanvas({ worldInit, tick, myOwner, onFlyClick, watchedFlyId = null }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
   const graphicsRef = useRef<Phaser.GameObjects.Graphics | null>(null);
   const tickRef = useRef<TickData | null>(tick);
   const ownerColorsRef = useRef<Map<string, number>>(new Map());
+  const onFlyClickRef = useRef(onFlyClick);
+  const watchedFlyIdRef = useRef(watchedFlyId);
   const [hover, setHover] = useState<HoverInfo | null>(null);
+
+  onFlyClickRef.current = onFlyClick;
+  watchedFlyIdRef.current = watchedFlyId;
 
   const cellSize = CANVAS_SIZE / worldInit.grid_size;
 
@@ -72,6 +83,14 @@ export function GameCanvas({ worldInit, tick, myOwner }: GameCanvasProps) {
             const gy = Math.floor(pointer.y / cellSize);
             const found = current.flies.find((fly) => fly.x === gx && fly.y === gy);
             setHover(found ? { fly: found, screenX: pointer.x, screenY: pointer.y } : null);
+          });
+          this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+            const current = tickRef.current;
+            if (!current) return;
+            const gx = Math.floor(pointer.x / cellSize);
+            const gy = Math.floor(pointer.y / cellSize);
+            const found = current.flies.find((fly) => fly.x === gx && fly.y === gy);
+            if (found) onFlyClickRef.current?.(found.id);
           });
         }
       }
@@ -108,9 +127,12 @@ export function GameCanvas({ worldInit, tick, myOwner }: GameCanvasProps) {
     drawEntities(graphics, tick.items, cellSize, KIND_COLORS.item);
     drawEntities(graphics, tick.mobs, cellSize, KIND_COLORS.mob);
     for (const fly of tick.flies) {
-      drawFly(graphics, fly, cellSize, colorForOwner(fly.owner), fly.owner === myOwner, worldInit.max_hunger);
+      drawFly(
+        graphics, fly, cellSize, colorForOwner(fly.owner), fly.owner === myOwner, worldInit.max_hunger,
+        fly.id === watchedFlyId,
+      );
     }
-  }, [tick, worldInit.grid_size, worldInit.max_hunger, cellSize, myOwner]);
+  }, [tick, worldInit.grid_size, worldInit.max_hunger, cellSize, myOwner, watchedFlyId]);
 
   return (
     <div className="relative inline-block">
@@ -155,6 +177,7 @@ function drawFly(
   color: number,
   isMine: boolean,
   maxHunger: number,
+  isWatched: boolean,
 ) {
   const cx = fly.x * cellSize + cellSize / 2;
   const cy = fly.y * cellSize + cellSize / 2;
@@ -164,6 +187,12 @@ function drawFly(
   if (isMine) {
     graphics.lineStyle(2, 0xffffff, 1);
     graphics.strokeCircle(cx, cy, radius + 2);
+  }
+  if (isWatched) {
+    // A color deliberately outside OWNER_COLORS so the watched ring never
+    // blends into a same-colored owner ring (decisions.md #46).
+    graphics.lineStyle(2, 0x22d3ee, 1);
+    graphics.strokeCircle(cx, cy, radius + (isMine ? 5 : 2));
   }
   // A thin hunger bar under the fly -- the one always-visible stat, the rest live in the hover tooltip.
   const barWidth = cellSize * 0.7;

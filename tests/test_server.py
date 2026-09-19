@@ -186,3 +186,84 @@ def test_a_death_shows_up_in_tick_events(templates):
 
         assert len(tick["data"]["events"]["deaths"]) == 1
         assert tick["data"]["events"]["deaths"][0]["cause"] == "damage"
+
+
+# --- watch / brain (decisions.md #46) ---------------------------------------
+
+def test_watch_replies_with_an_immediate_brain_snapshot(templates):
+    state = make_state(templates)
+    fly_id = next(iter(state.colony.observations))
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+
+        ws.send_json({"type": "watch", "data": {"fly_id": fly_id}})
+        brain = receive_until(ws, "brain")
+
+        assert brain["data"]["fly_id"] == fly_id
+
+
+def test_watch_with_fly_id_none_replies_with_a_null_snapshot(templates):
+    app = create_app(make_state(templates))
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+
+        ws.send_json({"type": "watch", "data": {"fly_id": None}})
+        brain = receive_until(ws, "brain")
+
+        assert brain["data"] is None
+
+
+def test_watched_fly_gets_a_brain_message_after_every_tick(templates):
+    state = make_state(templates, tick_interval=0.2)
+    fly_id = next(iter(state.colony.observations))
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+        ws.send_json({"type": "watch", "data": {"fly_id": fly_id}})
+        receive_until(ws, "brain")  # the immediate reply to "watch" itself
+
+        brain = receive_until(ws, "brain", max_messages=50)
+
+        assert brain["data"]["fly_id"] == fly_id
+        assert brain["data"]["action_source"] in {"escape", "wander", "plasticity"}
+
+
+def test_a_second_connection_can_watch_a_different_fly(templates):
+    state = make_state(templates, tick_interval=0.2, initial_population=2)
+    fly_ids = list(state.colony.observations)
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws_a, client.websocket_connect("/ws") as ws_b:
+        ws_a.receive_json()  # world_init
+        ws_b.receive_json()  # world_init
+        ws_a.send_json({"type": "watch", "data": {"fly_id": fly_ids[0]}})
+        ws_b.send_json({"type": "watch", "data": {"fly_id": fly_ids[1]}})
+        receive_until(ws_a, "brain")
+        receive_until(ws_b, "brain")
+
+        brain_a = receive_until(ws_a, "brain", max_messages=50)
+        brain_b = receive_until(ws_b, "brain", max_messages=50)
+
+        assert brain_a["data"]["fly_id"] == fly_ids[0]
+        assert brain_b["data"]["fly_id"] == fly_ids[1]
+
+
+def test_brain_goes_null_and_stops_once_the_watched_fly_dies(templates):
+    state = make_state(templates, tick_interval=0.2)
+    fly_id = next(iter(state.colony.observations))
+    state.colony.env.flies[0].health = 0  # dies on the first step
+    app = create_app(state)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # world_init
+        ws.send_json({"type": "watch", "data": {"fly_id": fly_id}})
+        receive_until(ws, "brain")  # the immediate reply to "watch" itself
+
+        brain = receive_until(ws, "brain", max_messages=50)
+        assert brain["data"] is None
+
+        # confirm the server actually stopped computing snapshots for the
+        # dead fly rather than resending null forever -- wait through a
+        # couple more tick intervals and make sure no further "brain"
+        # message shows up.
+        with pytest.raises(AssertionError):
+            receive_until(ws, "brain", max_messages=10)

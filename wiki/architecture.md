@@ -266,6 +266,17 @@ What you actually play (`decisions.md` #28). Depends on `world/`,
   or untrained (gain=1.0) otherwise; the plasticity circuit currently
   always starts untrained (gain=1.0) — no ES-style training loop exists
   yet for its prior, see roadmap.md.
+  `brain_snapshot(fly_id)` (`decisions.md` #46) assembles a per-fly
+  "brain inspector" diagnostic bundle — which of escape/wander/
+  plasticity produced its last action (`last_action_source`, set every
+  tick alongside the existing action-selection branch) plus the real
+  numbers behind that decision, almost entirely from state the agents
+  already cache for auditing (`EscapeAgent.last_danger_strength`,
+  `PlasticityAgent.last_valence`, `gain_drift()`,
+  `reinforcement_events`, `cumulative_dopamine`). The only genuinely
+  new computation is two `probe()` calls (food/danger reference
+  vectors), deliberately run only for whichever single fly is actually
+  being watched, never the whole population every tick.
 - **`colony_run.py`** — CLI (`python -m game.colony_run`) that runs a
   colony headlessly and logs population/births/deaths — a cheap way to
   watch it work before the real frontend exists, not the live game loop
@@ -345,6 +356,14 @@ it back, kept as its own top-level package for that reason, the same as
   `AppState` instead, the same discipline `fly_brain`'s own test fixtures
   already use. `python -m server.app` runs it directly; `uvicorn
   server.app:app` is the standard alternative.
+  `AppState.watching: dict[WebSocket, int | None]` (`decisions.md` #46)
+  tracks which fly, if any, each connection wants a `brain` message for;
+  a `watch` client message sets it (with an immediate reply) and
+  `send_brain_updates()` sends each watching connection its own
+  `Colony.brain_snapshot(fly_id)` after every tick — per-connection, not
+  broadcast, since different clients can watch different flies. Once a
+  watched fly dies, the connection's watch resets to `None` so the
+  server stops computing snapshots for a fly nobody can see anymore.
 
 ## `frontend/` — the Next.js + Phaser client
 
@@ -357,18 +376,34 @@ talks to `server/app.py` over WebSocket only, no other coupling.
   hand (no shared schema source yet).
 - **`src/lib/useGameSocket.ts`** — owns the one WebSocket connection,
   parses every message type, exposes plain React state (`worldInit`,
-  `tick`, `owner`, a request/event `log`) and two actions (`join`,
-  `sendRequest`). Everything downstream of this hook has no idea a wire
-  format exists.
+  `tick`, `owner`, a request/event `log`) and actions (`join`,
+  `sendRequest`, and since `decisions.md` #46, `watch(flyId)` plus
+  `watchedFlyId`/`brain` state). Everything downstream of this hook has
+  no idea a wire format exists.
 - **`src/components/GameCanvas.tsx`** — the Phaser grid. Redraws full
   state from scratch every tick, deliberately no incremental diffing —
   matches the wire contract's own "full state, not a diff" choice
   (`decisions.md` #44). Flies are circles colored by owner (a white
-  ring marks "you"); items/tiles/mobs/corpses are colored squares.
-  Hover detection is plain pointer-position math against the latest
-  tick's fly list, not a Phaser input object per fly — a "simple
-  colored shapes" v1, not sprite art (a deliberate scope decision, see
-  `decisions.md` #45, not a stand-in for missing assets).
+  ring marks "you"; since `decisions.md` #46, a cyan ring — deliberately
+  outside the owner color palette, a real bug found live in that entry —
+  marks whichever fly is currently watched). items/tiles/mobs/corpses
+  are colored squares. Hover detection is plain pointer-position math
+  against the latest tick's fly list, not a Phaser input object per fly
+  — a "simple colored shapes" v1, not sprite art (a deliberate scope
+  decision, see `decisions.md` #45, not a stand-in for missing assets).
+  A `pointerdown` handler the same way calls `onFlyClick(flyId)`,
+  wiring a click straight to `watch()`.
+- **`src/components/BrainPanel.tsx`** (`decisions.md` #46) — the "brain
+  inspector": renders `useGameSocket`'s `brain` snapshot for whichever
+  fly is watched, in plain language (which tier produced its last
+  action with a one-line explanation, danger sensed, current pull,
+  learned-so-far gain drift, reinforcement events, cumulative dopamine,
+  learned pull toward food-like/danger-like things, wander persistence/
+  heading). A `null` snapshot (not watching, fly not yet reported in, or
+  the watched fly died) renders one shared fallback message rather than
+  trying to distinguish those cases — they're indistinguishable from the
+  frontend's side of the wire contract, and the ambiguity is harmless
+  (the "loading" case resolves itself within one tick).
 - **`src/components/Hud.tsx`/`RequestLog.tsx`/`RequestInput.tsx`/
   `JoinScreen.tsx`** — tick/population counters and your energy meter;
   a scrolling log of your requests plus deaths/births as they happen;

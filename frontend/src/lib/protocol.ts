@@ -75,13 +75,42 @@ export interface ErrorData {
   message: string;
 }
 
+/**
+ * Per-fly diagnostic bundle (wiki/decisions.md #46), mirroring
+ * game/colony.py's Colony.brain_snapshot() exactly. `action_source` is
+ * which of the three tiers produced the fly's last action; the rest is
+ * the real numbers behind that decision, straight from the agents'
+ * own audit state -- nothing computed fresh in the frontend.
+ */
+export interface BrainSnapshot {
+  fly_id: number;
+  action_source: "escape" | "wander" | "plasticity" | null;
+  escape: {
+    danger_strength: number;
+  };
+  plasticity: {
+    valence: number;
+    gain_drift: number;
+    reinforcement_events: number;
+    cumulative_dopamine: number;
+    probe_food: number;
+    probe_danger: number;
+  };
+  wander: {
+    persistence: number;
+    current_direction: string | null;
+  };
+}
+
 export type ServerMessage =
   | { type: "world_init"; data: WorldInitData }
   | { type: "tick"; data: TickData }
   | { type: "joined"; data: JoinedData }
   | { type: "request_result"; data: RequestResultData }
-  | { type: "error"; data: ErrorData };
+  | { type: "error"; data: ErrorData }
+  | { type: "brain"; data: BrainSnapshot | null };
 
 export type ClientMessage =
   | { type: "join"; data: { owner: string } }
-  | { type: "player_request"; data: { owner: string; text: string } };
+  | { type: "player_request"; data: { owner: string; text: string } }
+  | { type: "watch"; data: { fly_id: number | null } };

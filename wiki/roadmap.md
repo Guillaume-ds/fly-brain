@@ -39,6 +39,7 @@ creatable element kind (items) actually exist — see `wiki/world.md`.
 | REINFORCE implementation (comparison to ES) | not started |
 | Open-world / random generation / distinct trap types, spiderweb v2 mechanic | not started, explicitly deferred (`decisions.md` #9) |
 | Frontend: FastAPI+WebSocket backend, Next.js/TypeScript + Phaser 3 rendering | **first iteration done** (`decisions.md` #44, #45) — backend `server/` package wraps `game/live_run.py`'s loop behind a WebSocket; `frontend/` (Next.js, TypeScript, Phaser 3) is a real client: join flow, tick-driven grid rendering (simple colored shapes, not sprite art yet), request input, HUD (tick/population/energy), request/event log, per-fly hover tooltip. Verified live end to end with Playwright against the real backend, not just built/typechecked. Not done: real sprite art, a multi-owner switcher in one client, incremental tick diffing, a shared TS/Python schema source |
+| Brain inspector — per-fly "why did it act" panel + live decision trace | **tiers 1+2 done, tested, verified live** (`decisions.md` #46) — click a fly, see which tier (escape/wander/plasticity) produced its last action and the real numbers behind that decision, updating every tick; compare flies by switching which one is watched (live flies only, no generational history — explicitly scoped that way). Tier 3 (a real neuron-graph visualization) is planned below, not built |
 
 ## Immediate next steps, in order
 
@@ -361,6 +362,56 @@ yet started (see "After that" below).
   building alone); no incremental tick diffing; no shared TS/Python
   schema source, `frontend/src/lib/protocol.ts` mirrors the wire
   format by hand.
+- ~~Brain inspector, tiers 1+2~~ done, see `decisions.md` #46. Click a
+  fly, see which tier (escape/wander/plasticity) produced its last
+  action and the real numbers behind that decision, live, every tick.
+- **Brain inspector, tier 3 — a real neuron-graph visualization.**
+  Designed, not built (`decisions.md` #46 explicitly scoped this out —
+  asked to plan it, not build it, alongside shipping tiers 1+2). The
+  goal: render the actual connectome subgraph a watched fly's circuit
+  runs on, with live spike animation, not just the summary numbers
+  tiers 1+2 already show.
+  - **Data already exists, nothing new to derive.** `Circuit.blueprint.
+    neuron_ids`/`edges` (real MaleCNS body ids and synapse weights) is
+    the graph; `Circuit.v` (membrane potential) and `Circuit.
+    spikes_prev` (last step's spikes) is the live per-tick state. A
+    watched fly's `EscapeAgent.circuit`/`PlasticityAgent.circuit` are
+    already reachable from `Colony` — no new simulation, just reading
+    state that's stepped every tick regardless.
+  - **Scale is the real complexity, and it's asymmetric.** The escape
+    circuit is small (~60 neurons, `decisions.md` #11's bound) — a
+    force-directed or even a fixed hand-laid-out graph is plausible to
+    render directly. The plasticity circuit is not (~481 neurons:
+    ~100 KCs, ~50 MBONs split approach/avoid, ~331 DANs split PAM/PPL —
+    `decisions.md` #26) — rendering it legibly means leaning on its
+    real functional clusters (KC/MBON/DAN, `PlasticityCircuitTemplate`
+    already carries the index lists) as a layout hint, e.g. one column
+    per cluster with edges crossing between them, rather than a generic
+    force-directed layout that would just produce a hairball at this
+    node count.
+  - **Live spike animation is a streaming problem, not just a static
+    render.** Naively adding per-neuron voltage/spike state to the
+    existing `brain` WebSocket message (`decisions.md` #46) multiplies
+    its size by ~481 floats/booleans per tick for a fly being watched —
+    fine for one watched fly (the same "only compute/send for who's
+    actually watched" discipline #46 already established), but a real
+    design question is whether every tick's full state is worth
+    sending vs. some cheaper delta or a client-side interpolation
+    between coarser samples.
+  - **Rendering surface: almost certainly not the Phaser tile grid.**
+    A node-link diagram at this density wants a dedicated canvas/SVG
+    view (a force-directed graph library, or hand-rolled with the
+    layout hint above) — a separate panel or modal, not another layer
+    drawn into `GameCanvas.tsx`'s existing 640×640 grid.
+  - **Open questions, not yet answered:** whether to show the escape
+    and plasticity circuits together or as separate views (they never
+    interact directly — freeze+override only compares their *outputs*,
+    `decisions.md` #5); how much of the real ~4,064/97/354 population
+    context (this bounded subgraph is a deliberate subsample,
+    `decisions.md` #26) to communicate so the visualization doesn't
+    imply it's the whole real circuit; whether a static "this fly's
+    wiring" view (no animation, cheap) is worth shipping as an
+    intermediate step before tackling live spike streaming.
 - **Structure/effect split for items, threats, and tiles** — separating
   *what moves/is consumed/occupies an area* (structure, discrete,
   tool-selected) from *what it does to a fly* (effect, continuous,

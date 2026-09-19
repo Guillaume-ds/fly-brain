@@ -3036,3 +3036,125 @@ an automated one; a real frontend test setup (Playwright/Vitest) is a
 reasonable next addition once the UI shape settles further, not before.
 142 Python tests passing total; frontend passes `next lint`, `tsc
 --noEmit`, and `next build` clean.
+
+## 46. Brain inspector: a per-fly "why did it do that" panel
+
+**Context:** asked for a representation of the fly "brain" itself, with
+three explicit goals — (1) understand why a fly took a given action,
+(2) see how flies differ from each other, (3) show the project's real
+neuroscience substrate isn't just skin-deep on top of an ordinary game.
+Asked explicitly for a complexity/feasibility read before committing to
+a design, not straight into building.
+
+**Three tiers were laid out and scoped before writing any code:**
+1. **Tier 1 — a brain panel**: click a fly, see the real numbers behind
+   its last decision. Cheap: everything it needs already exists as
+   audit state on the agents themselves (`decisions.md` #26's `probe()`/
+   `gain_drift()`/`reinforcement_events`/`cumulative_dopamine`).
+2. **Tier 2 — a live decision trace**: which of the three tiers
+   (escape/wander/plasticity) produced the fly's last action, updating
+   every tick. Also cheap — the freeze+override precedence
+   (`decisions.md` #5/#22/#40) already picks exactly one of the three
+   every tick in `Colony.step()`; nothing new to compute, just record
+   which branch ran.
+3. **Tier 3 — a real neuron-graph visualization**: render the actual
+   connectome subgraph (`Circuit.blueprint.neuron_ids`/`edges`) with
+   live spike animation (`Circuit.v`/`spikes_prev`). Real complexity —
+   layout for ~60 (escape) vs ~481 (plasticity, three functional
+   clusters) neurons, a rendering surface separate from the Phaser tile
+   grid, and a live per-tick spike feed. Flagged as its own design
+   problem, not attempted here.
+
+**Decision (explicit answers, not assumed):** build tiers 1 and 2 now;
+design tier 3 (below) without building it. For goal 2, "how it differs
+from other flies" means comparing currently-alive flies side by side by
+switching which one is watched — no generational/lineage history
+tracking. That scope was offered as a separate, larger option and
+explicitly declined in favor of the simpler live-only comparison.
+
+**Design principle carried through every layer:** compute the
+genuinely expensive diagnostic (`PlasticityAgent.probe()`, which steps
+a disposable circuit copy twice) only for whichever single fly is
+actually being watched, never for the whole population every tick — the
+same "cheap running stats, not a per-tick log" discipline #26 already
+established for `plasticity_summary()`. Everything else is free: two
+new one-line caches (`EscapeAgent.last_danger_strength`,
+`PlasticityAgent.last_valence`, both already being computed every tick
+regardless, now just also stored) and one dict (`Colony.
+last_action_source`) recording which branch of the existing
+escape/wander/plasticity if/elif/else in `Colony.step()` actually ran.
+
+**What was built:**
+- `fly_brain/agent.py` — `EscapeAgent.last_danger_strength`, cached in
+  `decide()`.
+- `fly_brain/plasticity.py` — `PlasticityAgent.last_valence`, cached in
+  `sense_and_decide()`.
+- `game/colony.py` — `Colony.last_action_source: dict[int, str]`,
+  set every tick alongside the existing action-selection logic
+  (refactored from a ternary to if/elif/else so each branch can also
+  record which one it was, decision logic itself unchanged); `Colony.
+  brain_snapshot(fly_id) -> dict | None`, assembling all of the above
+  plus the two `probe()` calls (against `env.food_type.attributes` and
+  `escape_template.danger_vector`, both reused reference vectors —
+  nothing new encoded) into one dict, or `None` if the fly is dead or
+  never existed.
+- `server/app.py` — a new `watch` client message
+  (`{"fly_id": int | None}`) and `AppState.watching: dict[WebSocket,
+  int | None]`; after every tick, each watching connection gets its own
+  `brain` message (`Colony.brain_snapshot(fly_id)`, `null` once the
+  watched fly dies) — per-connection, not a broadcast, since different
+  clients can watch different flies. A `watch` also gets an immediate
+  reply rather than waiting for the next tick. Once a watched fly dies,
+  the server stops computing snapshots for it (`watching[websocket]`
+  reset to `None`) rather than resending `null` forever.
+- `frontend/` — `protocol.ts` gained `BrainSnapshot`, the `watch`
+  client message, and the `brain` server message; `useGameSocket.ts`
+  exposes `watchedFlyId`/`brain`/`watch()`; `GameCanvas.tsx` sends
+  `watch(flyId)` on a fly click and draws a distinct ring around
+  whichever fly is currently watched; `BrainPanel.tsx` renders the
+  snapshot in plain language (action source with a one-line explanation
+  of what that tier means, danger sensed, current pull, learned-so-far
+  gain drift, reinforcement events, cumulative dopamine, learned pull
+  toward food-like/danger-like things, wander persistence/heading).
+
+**A real bug found live, not just built and typechecked:** the
+watched-fly ring was first drawn in the same yellow used by
+`OWNER_COLORS[1]` — invisible against a fly already owned by that
+color. Caught by actually looking at a live screenshot (two same-owner
+flies were visually indistinguishable even though only one was
+watched), fixed by picking a ring color (`0x22d3ee`, cyan) deliberately
+outside the owner palette.
+
+**Verified live:** ran the real backend and real frontend dev server
+together, drove the browser with Playwright. Confirmed: clicking a fly
+opens the panel with real, live-updating numbers (`current pull`
+changing between flies, `action_source` correctly reading "Learned
+response" for a plasticity-driven tick); the watched-fly ring renders
+distinctly from the owner-color ring; the `null`-on-death path
+delivers and the panel shows a clear fallback rather than stale data.
+Restarting the backend mid-session (to get a fresh, non-extinct
+population for a clean screenshot) surfaced a `pkill -f` self-match
+footgun in this environment unrelated to the feature itself — not a
+product bug, just a note for next time: match by PID via `ps | grep
+"[p]attern"`, not `pkill -f "pattern"`, since the pattern string is
+visible in the killing shell's own command line too.
+
+**Not done, deliberately out of scope here:** Tier 3 (the neuron-graph
+visualization) — planned in `wiki/roadmap.md`'s "After that" section,
+not built; generational/lineage history (explicitly declined for goal
+2); a dedicated frontend test suite (same standing gap as #45, verified
+live instead).
+
+Tests: `tests/test_brain_snapshot.py` (new, 11 tests) — `None` for a
+nonexistent/dead fly id and cleanup from `last_action_source` on death;
+`action_source` reflects the correct tier under forced escape/wander/
+plasticity scenarios (mirroring #40's own monkeypatch style); every
+snapshot field traced back to the real value on the underlying agent,
+including the two `probe()` calls against the real food/danger
+vectors. `tests/test_server.py` extended (5 new tests) — `watch` gets
+an immediate `brain` reply (including the `fly_id: None` case); a
+watched fly gets a `brain` message after every tick; two connections
+can watch two different flies independently; a watched fly's death
+sends one `null` `brain` message and then stops, verified by polling
+for a further one that never arrives. 158 Python tests passing total;
+frontend passes `next lint`, `tsc --noEmit`, and `next build` clean.

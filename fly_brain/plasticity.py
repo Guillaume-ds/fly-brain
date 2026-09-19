@@ -205,6 +205,11 @@ class PlasticityAgent:
         # auditing (decisions.md #26): cheap running stats, not a per-tick log
         self.reinforcement_events = 0
         self.cumulative_dopamine = 0.0
+        # decisions.md #46: cached from the most recent sense_and_decide()
+        # call -- the raw approach-minus-avoid membrane potential that
+        # produced this tick's action, for a consumer that wants to show
+        # "why" without recomputing it.
+        self.last_valence = 0.0
 
     def reset(self) -> None:
         self.circuit.reset()
@@ -237,6 +242,7 @@ class PlasticityAgent:
         self.kc_trace = self.kc_trace * KC_TRACE_DECAY + kc_spike_mask
 
         valence = self._mbon_valence()
+        self.last_valence = valence
         return self._valence_to_action(valence, obs.nearby)
 
     def _mbon_valence(self) -> float:
