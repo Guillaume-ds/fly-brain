@@ -3158,3 +3158,18 @@ can watch two different flies independently; a watched fly's death
 sends one `null` `brain` message and then stops, verified by polling
 for a further one that never arrives. 158 Python tests passing total;
 frontend passes `next lint`, `tsc --noEmit`, and `next build` clean.
+
+**Follow-up live verification, the death path specifically:** the
+first live pass above exercised death indirectly; asked directly to
+watch a fly die and confirm the panel, ran it again end to end against
+a fresh backend+frontend pair. Watched fly #4, confirmed the panel was
+first showing real live data (`action_source: "Learned response"`,
+real numbers, the cyan watch-ring visible on the grid) — deliberately
+before treating any later `null` as a death, not the transient
+loading flash `watch()` produces right after a click. Polled the
+request log and the panel in parallel: `fly #4 died (starved)`
+appeared in the log, and on that same poll the panel switched to its
+fallback message; waited 5 more seconds (several more ticks) and
+confirmed it stayed on the fallback rather than reverting to stale
+data. Screenshots taken at each stage (live, immediately after death,
+and several ticks later) all match the expected sequence.
