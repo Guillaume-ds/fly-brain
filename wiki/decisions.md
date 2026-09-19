@@ -2737,3 +2737,75 @@ removed (the mechanism they covered no longer exists);
 since it still pins the same underlying claim — a kill produces a real
 same-tick `HUNGER` effect for a nearby survivor — through the new
 mechanism. 120 tests passing total.
+
+## 42. Combat/energy constants: playtested, kept as-is, target reframed
+
+**Context:** the actual playtesting task #41 was found in service of.
+Built `training/balance_sweep.py` — real `Environment` mechanics, not
+hand-derived formulas — measuring combat's expected payoff against
+foraging's, in `reinforce()`'s own reward-minus-punishment currency
+(`fly_brain.plasticity.CHANNEL_WEIGHTS`, reused directly). Original
+target: combat and foraging comparable, neither dominant.
+
+**Finding: that target isn't reachable by tuning `FLY_COMBAT_DAMAGE`/
+`CORPSE_HUNGER_FRACTION` at all.** Foraging nets `+52.6`. 1v1 combat
+between equal-health flies is mutual death for every value tested (3–12
+damage, 0.25–1.0 fraction) — structural, not tunable: symmetric damage
+plus equal starting health means both flies always reach 0 the same
+tick, regardless of either constant. Combat's actual best case, a 2v1
+gang-up (the one #41 confirmed really does pay a surviving attacker),
+nets deeply negative across the entire tested grid, `-115` to `-171`.
+Swept further to rule out a viable region entirely — up to
+`damage=50`, `fraction=2.0` (double a rival's own hunger, well past the
+realistic range) — best case still only `-71`. The real cause isn't
+either constant: it's `CHANNEL_WEIGHTS[HEALTH] = 3.0` (decisions.md
+#26), which weights sustained combat-contact HEALTH punishment three
+times over the HUNGER reward a corpse can ever pay out, since that
+reward is capped by what the dead fly actually had.
+
+**Decision: reframe the target instead of chasing it, and keep both
+constants at their existing values.** Combat is accepted as a costly,
+situational strategy — not a parallel food source comparable to
+foraging, closer to "worth it under real pressure" (territorial
+defense, eliminating a growing threat, picking off an already-weakened
+rival) than a routine alternative. Given that reframing, the sweep data
+argues for no change:
+
+- `FLY_COMBAT_DAMAGE` stays `5`. It already divides `max_health=100`
+  evenly (20 ticks to drop a full-health rival, no wasted overkill
+  tick) — the sweep's own "overkill waste" finding (a damage value that
+  doesn't evenly divide a target's remaining health makes the attacker
+  eat a full extra tick of self-punishment for no added benefit) says
+  this is already a reasonably efficient value. Pushing damage much
+  higher nets only marginally less negative in the data (`-171` →
+  `-142` at `damage=15`; `-115` → `-110` at `damage=50`, fraction held
+  fixed) while trading away real tactical depth: faster resolution
+  shrinks the window where a gang-up, a retreat, or a third party
+  arriving actually matters, making combat feel more like a coin-flip
+  than a decision.
+- `CORPSE_HUNGER_FRACTION` stays `0.5`. A real reward for successfully
+  scavenging a kill without transferring a rival's *entire* remaining
+  hunger — pushing toward `1.0` would also make well-fed rivals
+  disproportionately attractive targets (predation-for-resources
+  dynamics nobody's asked for), not something implied by "costly but
+  sometimes worth it."
+- Energy constants (`STARTING_ENERGY`, `MAX_ENERGY`,
+  `ENERGY_REGEN_PER_TICK`, `KIND_BASE_COST`) also stay as-is — no
+  strong opinion on a target beyond "show me the data" going in, and
+  the sweep's numbers (a strength-3 item: ~3 free from the starting
+  pool, then one every 60 ticks; a real `Environment` gate landing in
+  the same ballpark as the formula) raised nothing that looked broken.
+
+**What this closes:** the "placeholders, not tuned by playing yet" flag
+that's sat on `FLY_COMBAT_DAMAGE`/the corpse-hunger fraction since
+#34/#35 — not by picking new numbers, but by actually checking them
+against real mechanics and finding the existing values already fit a
+now-explicit target. Still genuinely a placeholder in one sense: this
+is a headless mechanical sweep, not a real multi-tick colony playthrough
+under these constants — if a longer live run later shows combat is
+*never* chosen even when it should be (or is chosen far too often),
+that's new evidence this entry doesn't have.
+
+No source changes — `world/env.py`'s constants are untouched. This
+entry exists to record that they were checked and kept deliberately,
+not left alone by default.

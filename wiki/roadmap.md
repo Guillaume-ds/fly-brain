@@ -151,8 +151,10 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     only one instruction source, so `energy` was a single scalar;
     step 15 below turned it into `dict[str, float]`, one pool per
     owner, exactly as this step's sequencing note anticipated.
-    Constants above are placeholders, explicitly not tuned by playing
-    yet (`decisions.md` #33 left them open on purpose).
+    Constants above were explicitly left untuned by #33 on purpose; kept
+    as-is after playtesting them via `training/balance_sweep.py`
+    (`decisions.md` #42) — the sweep's numbers raised nothing that
+    looked broken.
 
 15. ~~Multi-colony ownership~~ done, see `decisions.md` #34, #35.
     `Fly.owner` (inherited at birth); `Environment.register_owner()`
@@ -193,11 +195,13 @@ sensing/learning redesign (`decisions.md` #22), in checkpointed phases:
     automatically, all together in one running session; a full
     single-player headless colony run confirmed byte-for-byte
     unaffected. Still open, deliberately: home-region geometry, whether
-    `max_population` stays shared or goes per-player, the combat damage
-    constant, and the corpse hunger fraction (real risk to tune around:
-    could make combat more lucrative than foraging, on top of the
-    still-open exploration-bootstrapping gap, `decisions.md` #38) — all
-    placeholders, not tuned by playing yet.
+    `max_population` stays shared or goes per-player — placeholders, not
+    tuned by playing yet. The combat damage constant and the corpse
+    hunger fraction were checked and kept as-is, see `decisions.md` #42:
+    playtesting found "comparable to foraging" isn't reachable via these
+    two constants at all (the real driver is `CHANNEL_WEIGHTS[HEALTH]`
+    in `fly_brain/plasticity.py`), so the target was reframed to "costly
+    but sometimes worth it," which the existing values already fit.
 
 Remaining, not yet started: an evolutionary process for the plasticity
 circuit's own prior/hyperparameters (currently untrained, gain=1.0); a
@@ -285,6 +289,18 @@ yet started (see "After that" below).
   corpses (30/30, not 45/30) and no immediate reward to either
   combatant; a real 2v1 gang-up correctly rewards a surviving attacker
   same-tick (`HUNGER +20`).
+- ~~Combat/energy constants, playtested~~ done, see `decisions.md` #42.
+  The actual sweep #41 was found in service of. Finding: "comparable to
+  foraging" isn't reachable via `FLY_COMBAT_DAMAGE`/`CORPSE_HUNGER_
+  FRACTION` at all -- foraging nets `+52.6`, combat's best case (a 2v1
+  gang-up) nets `-115` to `-171` across the whole tested grid, and
+  stays negative even at extreme, unrealistic values (`damage=50`,
+  `fraction=2.0` still only reaches `-71`). The real driver is
+  `CHANNEL_WEIGHTS[HEALTH]=3.0` (#26), outside this sweep's scope.
+  Decision: reframe the target to "costly but sometimes worth it"
+  rather than chase parity, and keep both constants (and all energy
+  constants) at their existing values -- checked against real
+  mechanics and kept deliberately, not left alone by default.
 - **What's still open** — decay itself remains deliberately unpunished
   (a colony that quietly starves without ever touching a `starve` mob
   still gets no punishment signal from that decline). Exploration-
